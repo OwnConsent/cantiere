@@ -73,6 +73,12 @@ bash_hook 'python3 -c "print(10 // 3)"'                  guard-paths.sh pass
 bash_hook 'python3 -c "p=\"/api/v1/utenti\"; print(p)"' guard-paths.sh pass
 bash_hook 'python3 -c "print(open(\"../cmp/.env\").read())"' guard-paths.sh deny
 
+echo; echo "Separatori di shell: il ; non fa parte del percorso (falso positivo del 13/09)"
+bash_hook "cd $CLAUDE_PROJECT_DIR; cat CLAUDE.md"      guard-paths.sh pass
+bash_hook "cd $CLAUDE_PROJECT_DIR/docs; ls"            guard-paths.sh pass
+bash_hook 'cd ../cmp; cat .env'                        guard-paths.sh deny
+bash_hook 'cat ~/.ssh/id_rsa; echo fine'               guard-paths.sh deny
+
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass
 bash_hook 'go test -race ./...'                       guard-paths.sh pass

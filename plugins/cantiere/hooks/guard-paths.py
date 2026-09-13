@@ -68,15 +68,23 @@ def main():
             if voce and voce.lower() in cmd.lower():
                 deny(f"riferimento a '{voce}'")
 
-    # 3 — token che sono percorsi
-    try:
-        tokens = shlex.split(cmd, comments=False)
-    except ValueError:
-        tokens = re.split(r"\s+", cmd)
+    # 3 — token che sono percorsi.
+    # Si segmenta PRIMA sui separatori di shell: shlex non spezza sul ";", quindi
+    # `cd /percorso; cat x` produrrebbe il token "/percorso;" — con il punto e
+    # virgola attaccato — che non esiste e risulta fuori progetto.
+    # Falso positivo osservato il 13/09, due letture bloccate a L00.
+    segmenti = re.split(r"&&|\|\||[;|&\n]", cmd)
+    tokens = []
+    for seg in segmenti:
+        try:
+            tokens.extend(shlex.split(seg, comments=False))
+        except ValueError:
+            tokens.extend(re.split(r"\s+", seg))
 
     home = os.path.realpath(os.path.expanduser("~"))
     for raw in tokens:
         tok = raw.split("=", 1)[1] if raw.startswith("--") and "=" in raw else raw
+        tok = tok.strip("\"'`),;&|")          # punteggiatura di shell rimasta ai bordi
         if not tok or "://" in tok:
             continue
         # corpo di codice, non un percorso: se ne occupa il livello 4
