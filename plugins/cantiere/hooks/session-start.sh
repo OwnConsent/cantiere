@@ -5,6 +5,9 @@ set -uo pipefail
 mkdir -p .work
 : > .work/.session-start
 rm -f .work/.journal-nudged
+# da ora e finche' la sessione e' aperta, i commit sono del filo principale,
+# non di una persona: vedi hooks/agent-stamp.sh
+printf 'orchestrator' > .work/.current-agent
 cat <<'MSG'
 Cantiere attivo.
 Gate umani: nessun push su main, nessun merge di PR, nessun comando su produzione.
