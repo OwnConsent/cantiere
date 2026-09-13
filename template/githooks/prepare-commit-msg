@@ -13,9 +13,12 @@ SORGENTE="${2:-}"
 # non toccare merge, squash, amend con messaggio già pronto
 case "$SORGENTE" in merge|squash) exit 0 ;; esac
 
-AGENTE="sconosciuto"
-[ -f .work/.current-agent ] && AGENTE=$(cat .work/.current-agent 2>/dev/null || echo sconosciuto)
-[ -z "$AGENTE" ] && AGENTE="sconosciuto"
+# Nessun marcatore = nessuna sessione aperta = il commit e' di una persona.
+# Non si firma: attribuire a un agente il lavoro di un umano falsa il registro
+# tanto quanto il contrario.
+[ -f .work/.current-agent ] || exit 0
+AGENTE=$(cat .work/.current-agent 2>/dev/null || echo "")
+[ -z "$AGENTE" ] && exit 0
 
 # se la firma c'è già (rebase, amend), non duplicarla
 grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0

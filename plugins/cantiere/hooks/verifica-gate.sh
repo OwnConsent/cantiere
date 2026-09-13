@@ -39,6 +39,13 @@ bash_hook 'git push origin main'                      guard-prod.sh deny
 bash_hook 'git push --force origin feature'           guard-prod.sh deny
 bash_hook 'gh release create v1.0.0'                  guard-prod.sh deny
 
+echo; echo "Push: il ramo conta, non la parola (falso positivo del 13/09)"
+bash_hook 'git checkout -b fix/x main && git push -u origin fix/x' guard-prod.sh pass
+bash_hook 'git switch -c docs/y origin/main && git push -u origin docs/y' guard-prod.sh pass
+bash_hook 'git push -u origin issue-4-feature'   guard-prod.sh pass
+bash_hook 'git push origin HEAD:main'            guard-prod.sh deny
+bash_hook 'git checkout -b x && git push origin main' guard-prod.sh deny
+
 echo; echo "Produzione — modifiche negate, diagnosi ammessa"
 bash_hook 'kubectl apply -f x.yaml --context prod-eu' guard-prod.sh deny
 bash_hook 'kubectl delete pod api-7 --context prod'   guard-prod.sh deny
@@ -60,6 +67,11 @@ bash_hook 'cat ~/.ssh/id_ed25519'                     guard-paths.sh deny
 bash_hook 'cat ../cmp/.env'                           guard-paths.sh deny
 bash_hook 'gh api repos/OwnConsent/cmp/contents/x'    guard-paths.sh deny
 bash_hook 'find .. -name .env'                        guard-paths.sh deny
+
+echo; echo "Codice Python — // e stringhe assolute non sono percorsi (falso positivo del 13/09)"
+bash_hook 'python3 -c "print(10 // 3)"'                  guard-paths.sh pass
+bash_hook 'python3 -c "p=\"/api/v1/utenti\"; print(p)"' guard-paths.sh pass
+bash_hook 'python3 -c "print(open(\"../cmp/.env\").read())"' guard-paths.sh deny
 
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass

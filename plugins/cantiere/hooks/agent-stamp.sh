@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# SubagentStart / SubagentStop.
-# Tiene aggiornato .work/.current-agent con il ruolo che sta lavorando ora,
-# così il git hook prepare-commit-msg può firmare il commit a suo nome.
+# SubagentStart / SubagentStop / Stop.
+# Tiene aggiornato .work/.current-agent con chi sta lavorando ora, così il git hook
+# prepare-commit-msg può firmare il commit a suo nome.
 #
-# Il nome del campo che porta il tipo di subagent nel payload non è garantito
-# stabile fra le versioni: proviamo le chiavi plausibili e, se non troviamo
-# nulla, scriviamo "sconosciuto" invece di indovinare. La fonte autorevole di
-# chi ha fatto cosa resta journal/, non questo file.
+# Tre stati, non due:
+#   nome di un ruolo  -> sta lavorando quel subagente
+#   "orchestrator"    -> sta lavorando il filo principale della sessione
+#   file assente      -> non c'è nessuna sessione: il commit è di una persona
+#
+# L'ultimo caso è il motivo per cui il file va rimosso alla chiusura: un commit
+# umano non deve risultare firmato da un agente.
 set -uo pipefail
 INPUT=$(cat 2>/dev/null || echo '{}')
 mkdir -p .work
@@ -17,11 +20,19 @@ try: d=json.load(sys.stdin)
 except Exception: d={}
 print(d.get("hook_event_name",""))' 2>/dev/null || echo "")
 
-if [ "$EVENT" = "SubagentStop" ]; then
-  rm -f .work/.current-agent
-  exit 0
-fi
+case "$EVENT" in
+  Stop)
+    rm -f .work/.current-agent
+    exit 0 ;;
+  SubagentStop)
+    printf 'orchestrator' > .work/.current-agent
+    exit 0 ;;
+esac
 
+# SubagentStart (o evento non riconosciuto con un nome dentro).
+# Il campo che porta il tipo di subagent non è garantito stabile fra le versioni:
+# proviamo le chiavi plausibili e, se non troviamo nulla, restiamo su orchestrator
+# invece di inventare un ruolo. La fonte autorevole di chi ha fatto cosa è journal/.
 NAME=$(printf '%s' "$INPUT" | python3 -c '
 import sys,json
 try: d=json.load(sys.stdin)
@@ -31,7 +42,7 @@ for k in ("agent_type","subagent_type","agent","agentType","name","subagent"):
     if isinstance(v,str) and v.strip():
         print(v.strip()); break
 else:
-    print("sconosciuto")' 2>/dev/null || echo "sconosciuto")
+    print("orchestrator")' 2>/dev/null || echo "orchestrator")
 
 printf '%s' "$NAME" > .work/.current-agent
 exit 0

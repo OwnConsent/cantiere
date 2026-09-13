@@ -15,11 +15,26 @@ deny() { echo "GATE: $1 — questa azione richiede una persona. Prepara il cambi
 
 shopt -s nocasematch
 case "$CMD" in
-  *"git push"*" main"*|*"git push"*" master"*|*"git push --force"*) deny "push su ramo protetto" ;;
-  *"gh pr merge"*)                                                  deny "merge di PR" ;;
-  *"gh release create"*)                                            deny "creazione di release" ;;
+  *"gh pr merge"*)       deny "merge di PR" ;;
+  *"gh release create"*) deny "creazione di release" ;;
+  *"git push --force"*|*"git push -f "*) deny "push forzato" ;;
 esac
 shopt -u nocasematch
+
+# Push su ramo protetto: si guarda SEGMENTO PER SEGMENTO, non tutto il comando.
+# Altrimenti `git checkout -b x main && git push -u origin x` viene negato per la
+# parola "main" che sta nel checkout, non nel push. Falso positivo osservato il 13/09:
+# induce a spezzare i comandi finche' il guardiano smette di lamentarsi, che e'
+# un'abitudine peggiore del problema che risolve.
+SEGMENTI=$(printf '%s' "$CMD" | sed 's/&&/\n/g; s/||/\n/g; s/;/\n/g; s/|/\n/g')
+while IFS= read -r seg; do
+  [[ "$seg" =~ (^|[[:space:]])git[[:space:]]+push($|[[:space:]]) ]] || continue
+  # il ramo di destinazione e' l'ultimo token, oppure la parte dopo i due punti
+  if [[ "$seg" =~ (^|[[:space:]])(main|master)([[:space:]]|$) ]] \
+     || [[ "$seg" =~ :(main|master)([[:space:]]|$) ]]; then
+    deny "push su ramo protetto"
+  fi
+done <<< "$SEGMENTI"
 
 PROD='(^|[^a-z])(prod|production|live)([^a-z]|$)'
 
