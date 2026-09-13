@@ -1,0 +1,44 @@
+# Stadio 07 — note di rilascio dai commit e dalle specifiche.
+name: Note di rilascio agentiche
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag da documentare
+        required: true
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+  id-token: write
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Esegui ${CLAUDE_PLUGIN_ROOT}/skills/release-notes/SKILL.md per il tag
+            ${{ github.event.inputs.tag || github.ref_name }}.
+
+            Delega a @comms-release la scrittura e a @docs-writer il changelog tecnico.
+            I numeri devono venire da una fonte: se non ci sono, ometti la voce.
+
+            Scrivi il risultato in RELEASE_NOTES_DRAFT.md e apri una PR con quel file.
+            NON creare la release su GitHub e non pubblicare nulla altrove: è un gate umano.
+          claude_args: |
+            --permission-mode auto
+            --allowedTools "Read,Grep,Glob,Write,Bash(git *),Bash(gh issue view *),Bash(gh pr *),Task"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

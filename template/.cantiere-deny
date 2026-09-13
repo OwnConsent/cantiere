@@ -1,0 +1,11 @@
+# Percorsi e nomi che questa sessione non deve toccare dalla shell.
+# Una voce per riga, corrispondenza per sottostringa sul comando.
+# Le credenziali (.ssh, .aws, .kube, gh, docker, gnupg) sono già bloccate
+# dall'hook e non serve elencarle qui.
+
+# Il repository del prodotto: sta su questa macchina ma non riguarda il sito.
+ownconsent/cmp
+OwnConsent/cmp
+
+# Altri progetti sulla stessa macchina — aggiungi i tuoi.
+# ~/src/altro-cliente

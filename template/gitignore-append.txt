@@ -1,0 +1,4 @@
+# --- aggiungi al tuo .gitignore ---
+.work/
+RELEASE_NOTES_DRAFT.md
+.claude/settings.local.json

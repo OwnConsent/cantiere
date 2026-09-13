@@ -1,0 +1,48 @@
+# Manutenzione notturna — PR piccole e separate, una ragione per PR.
+name: Manutenzione agentica
+
+on:
+  # Attenzione: su un repository pubblico GitHub disattiva le schedule dopo
+  # 60 giorni senza attivita' sul repo. Se il progetto si ferma, questa
+  # smette di partire in silenzio: riattivala da Actions.
+  schedule:
+    - cron: '0 2 * * 2'   # martedì 04:00 Europe/Rome
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  manutenzione:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Agisci come il subagent @maintenance (${CLAUDE_PLUGIN_ROOT}/agents/maintenance.md).
+
+            1. Aggiornamenti patch e minor delle dipendenze, raggruppati per ecosistema.
+            2. Test flaky: identifica, riproduci ripetendo, correggi la causa.
+            3. Audit di sicurezza delle dipendenze: se emerge una CVE alta o critica,
+               apri una issue con label `security` invece di una PR.
+
+            UNA PR PER COSA. Mai mescolare. Non toccare file coinvolti in PR aperte.
+            Ogni PR deve avere test verdi prima di essere aperta; se non passano, non
+            aprirla e apri invece una issue con l'errore.
+
+            Se in totale non c'è nulla da fare, non aprire nulla e termina.
+          claude_args: |
+            --max-turns 30
+            --permission-mode auto
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash,Task"
+            --model claude-haiku-4-6
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

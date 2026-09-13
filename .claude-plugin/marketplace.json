@@ -1,0 +1,17 @@
+{
+  "name": "cantiere",
+  "owner": { "name": "Search On Media Group" },
+  "metadata": {
+    "description": "Team tech agentico: 23 ruoli in cantiere, un osservatore che ne fa un caso studio, due soli gate umani.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "cantiere",
+      "source": "./plugins/cantiere",
+      "description": "23 subagent specializzati, collaudo parallelo, gate meccanici su merge e produzione, journal tracciato e generatore di materiale didattico.",
+      "category": "workflow",
+      "keywords": ["multi-agent", "review", "ci", "gdpr", "kubernetes", "formazione"]
+    }
+  ]
+}

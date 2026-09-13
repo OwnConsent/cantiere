@@ -1,0 +1,11 @@
+{
+  "name": "cantiere",
+  "displayName": "Cantiere",
+  "version": "0.1.0",
+  "description": "Un team di 23 agenti specializzati che porta una issue dalla specifica alla produzione, con due soli interventi umani: merge su main e deploy in produzione. Ogni passaggio lascia una traccia nel journal, da cui un osservatore ricava materiale didattico.",
+  "author": { "name": "Search On Media Group" },
+  "agents": "./agents",
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json",
+  "keywords": ["multi-agent", "code-review", "gdpr", "formazione"]
+}

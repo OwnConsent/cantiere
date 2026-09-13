@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Firma ogni commit con il ruolo che lo ha prodotto.
+#
+# Aggiunge due righe in coda al messaggio:
+#   Cantiere-Agent: <ruolo>     leggibile a macchina, si cerca con git log --grep
+#   Co-Authored-By: ...         visibile come co-autore nell'interfaccia GitHub
+#
+# Attivalo una volta per repository:  git config core.hooksPath githooks
+set -uo pipefail
+MSG_FILE="$1"
+SORGENTE="${2:-}"
+
+# non toccare merge, squash, amend con messaggio già pronto
+case "$SORGENTE" in merge|squash) exit 0 ;; esac
+
+AGENTE="sconosciuto"
+[ -f .work/.current-agent ] && AGENTE=$(cat .work/.current-agent 2>/dev/null || echo sconosciuto)
+[ -z "$AGENTE" ] && AGENTE="sconosciuto"
+
+# se la firma c'è già (rebase, amend), non duplicarla
+grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
+
+printf '\nCantiere-Agent: %s\nCo-Authored-By: cantiere-%s <%s@cantiere.invalid>\n' \
+  "$AGENTE" "$AGENTE" "$AGENTE" >> "$MSG_FILE"
+exit 0
