@@ -79,6 +79,12 @@ bash_hook "cd $CLAUDE_PROJECT_DIR/docs; ls"            guard-paths.sh pass
 bash_hook 'cd ../cmp; cat .env'                        guard-paths.sh deny
 bash_hook 'cat ~/.ssh/id_rsa; echo fine'               guard-paths.sh deny
 
+echo; echo "Prosa non e' un percorso: barre isolate e corpi di testo (13/09)"
+bash_hook 'gh pr comment 17 --body "profilo: 150 ms / 1,6 Mbps / 750 kbps"' guard-paths.sh pass
+bash_hook 'git commit -m "docs: soglie 150 ms / 1,6 Mbps"'                  guard-paths.sh pass
+bash_hook 'gh pr create --title "perf / soglie" --body "sezione 3 / 4"'     guard-paths.sh pass
+bash_hook 'gh pr comment 17 --body "$(cat ../cmp/.env)"'                    guard-paths.sh deny
+
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass
 bash_hook 'go test -race ./...'                       guard-paths.sh pass

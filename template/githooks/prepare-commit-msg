@@ -23,6 +23,18 @@ AGENTE=$(cat .work/.current-agent 2>/dev/null || echo "")
 # se la firma c'è già (rebase, amend), non duplicarla
 grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
 
-printf '\nCantiere-Agent: %s\nCo-Authored-By: cantiere-%s <%s@cantiere.invalid>\n' \
+# git riconosce i trailer solo se stanno nell'ULTIMO paragrafo. Se il messaggio
+# finisce gia' con una riga vuota, aggiungerli in coda ne fa un paragrafo a se' e
+# git non li vede piu': osservato sul commit d5e8331 del 13/09.
+python3 - "$MSG_FILE" <<'PY_EOF'
+import sys, re
+f = sys.argv[1]
+testo = open(f, encoding="utf-8", errors="replace").read()
+# esattamente UNA riga vuota prima dei trailer: senza, git li legge come corpo;
+# con due o piu', li considera un paragrafo a se' e non li riconosce.
+open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
+PY_EOF
+
+printf 'Cantiere-Agent: %s\nCo-Authored-By: cantiere-%s <%s@cantiere.invalid>\n' \
   "$AGENTE" "$AGENTE" "$AGENTE" >> "$MSG_FILE"
 exit 0
