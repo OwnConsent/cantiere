@@ -81,11 +81,31 @@ def main():
         except ValueError:
             tokens.extend(re.split(r"\s+", seg))
 
+    # Argomenti che per definizione sono TESTO, non percorsi: il corpo di un
+    # commento, un messaggio di commit, un titolo. Analizzarli come percorsi ha
+    # prodotto tre falsi positivi il 13/09 — barre isolate in «150 ms / 1,6 Mbps»,
+    # una virgola dopo una barra, il corpo di una PR. Il livello 4 continua a
+    # scandire TUTTO il comando, quindi una fuga vera dentro un --body resta negata.
+    TESTO = {"-m", "--message", "--body", "-b", "--title", "-t", "--notes", "-d",
+             "--description", "--subject"}
+
     home = os.path.realpath(os.path.expanduser("~"))
+    salta_prossimo = False
     for raw in tokens:
+        if salta_prossimo:
+            salta_prossimo = False
+            continue
+        if raw in TESTO:
+            salta_prossimo = True
+            continue
         tok = raw.split("=", 1)[1] if raw.startswith("--") and "=" in raw else raw
         tok = tok.strip("\"'`),;&|")          # punteggiatura di shell rimasta ai bordi
         if not tok or "://" in tok:
+            continue
+        # una barra isolata e' prosa, non un argomento di percorso.
+        # SOLO barre: includere anche i punti farebbe passare "..", che e' una
+        # risalita vera — regressione colta dalla suite il 13/09.
+        if set(tok) <= {"/"}:
             continue
         # corpo di codice, non un percorso: se ne occupa il livello 4
         if re.search(r"\s", tok):
