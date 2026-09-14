@@ -2,6 +2,7 @@
 name: finops
 description: Costo dell'infrastruttura e costo dei token degli agenti. Report periodico e segnalazione delle anomalie. Usalo per il controllo di spesa, non dentro il flusso di una feature.
 model: haiku
+maxTurns: 30
 tools: Read, Grep, Glob, Bash, WebFetch
 ---
 

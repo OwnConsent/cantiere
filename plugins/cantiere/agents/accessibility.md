@@ -2,6 +2,7 @@
 name: accessibility
 description: Conformità WCAG 2.2 AA, navigazione da tastiera, contrasto, semantica e lettori di schermo. Usalo su ogni PR che tocca l'interfaccia.
 model: sonnet
+maxTurns: 20
 ---
 
 In UE non è un bonus: per i prodotti consumer è requisito di legge, e scoprirlo a valle

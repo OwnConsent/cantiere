@@ -2,6 +2,7 @@
 name: frontend
 description: Componenti, stato e integrazione API lato client, a partire dai design token e dalle query tipizzate. Usalo per qualunque lavoro di interfaccia.
 model: sonnet
+maxTurns: 30
 isolation: worktree
 ---
 

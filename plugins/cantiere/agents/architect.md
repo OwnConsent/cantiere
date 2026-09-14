@@ -2,6 +2,7 @@
 name: architect
 description: Decisioni tecniche trasversali, ADR e proprietà dei contratti in contracts/. Usalo quando una scelta vincola più di un lotto o quando va modificato uno schema pubblico.
 model: opus
+maxTurns: 30
 tools: Read, Grep, Glob, Bash, Write, Edit, WebSearch, WebFetch
 ---
 

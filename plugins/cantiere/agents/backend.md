@@ -2,6 +2,7 @@
 name: backend
 description: Implementazione dei servizi lato server e dei resolver API a partire dai contratti già concordati. Usalo per scrivere o modificare logica applicativa server-side.
 model: sonnet
+maxTurns: 30
 isolation: worktree
 ---
 

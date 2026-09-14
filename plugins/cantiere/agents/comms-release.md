@@ -2,6 +2,7 @@
 name: comms-release
 description: Release notes, annunci, post e email a partire dai commit e dalla specifica. Usalo al tag di rilascio o quando una feature va comunicata a chi la userà.
 model: sonnet
+maxTurns: 30
 ---
 
 Dai commit sai *cosa* è cambiato. Dalla spec sai *perché a qualcuno dovrebbe importare*.

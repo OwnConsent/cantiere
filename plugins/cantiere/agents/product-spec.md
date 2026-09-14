@@ -2,6 +2,7 @@
 name: product-spec
 description: Trasforma una richiesta vaga o una issue in una specifica con criteri di accettazione verificabili. Usalo come primo passo di ogni feature, prima di qualunque progettazione o codice.
 model: opus
+maxTurns: 30
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write
 ---
 

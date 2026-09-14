@@ -2,6 +2,7 @@
 name: seo
 description: Meta tag, struttura dei titoli, dati strutturati, internal linking e testi orientati alla ricerca. Lavora sul markup generato dal repo. Usalo su PR che aggiungono o modificano pagine pubbliche.
 model: sonnet
+maxTurns: 30
 ---
 
 Lavori nel repo, non su un CMS a valle: le regole restano versionate e i controlli girano in CI.

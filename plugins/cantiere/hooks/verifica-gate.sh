@@ -12,6 +12,20 @@ export CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 OK=0; KO=0
 V="\033[32m"; X="\033[31m"; N="\033[0m"
 
+# Il livello 3 di guard-paths considera sicuri i prefissi di sistema (/tmp, /usr,
+# /opt, ...). Se il progetto vive sotto uno di quelli, "uscire dal progetto" non
+# risulta mai un'uscita e mezza suite passa per il motivo sbagliato: la prima
+# volta che e' successo, il 14/09, sei verifiche di perimetro davano verde da
+# sole. Non e' solo un artefatto della prova: un progetto clonato sotto /tmp non
+# ha perimetro davvero.
+case "$CLAUDE_PROJECT_DIR" in
+  /usr/*|/bin/*|/sbin/*|/lib/*|/lib64/*|/etc/*|/opt/*|/tmp/*|/var/tmp/*|/dev/*|/proc/*|/snap/*|/run/*|/nix/*)
+    printf "\n${X}ATTENZIONE${N}  il progetto sta sotto un prefisso di sistema (%s).\n" "$CLAUDE_PROJECT_DIR"
+    printf "            Li' il perimetro di guard-paths non vale e le verifiche di\n"
+    printf "            perimetro passano per il motivo sbagliato. Sposta il progetto\n"
+    printf "            sotto \$HOME prima di fidarti di questo risultato.\n" ;;
+esac
+
 bash_hook() { # comando, hook, atteso(deny|pass)
   local out rc
   out=$(printf '%s' "{\"tool_input\":{\"command\":$(printf '%s' "$1" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))')}}" \
@@ -65,7 +79,11 @@ bash_hook 'DROP TABLE consensi;'                      guard-prod.sh deny
 echo; echo "Perimetro — fuori dal progetto"
 bash_hook 'cat ~/.ssh/id_ed25519'                     guard-paths.sh deny
 bash_hook 'cat ../cmp/.env'                           guard-paths.sh deny
-bash_hook 'gh api repos/OwnConsent/cmp/contents/x'    guard-paths.sh deny
+if [ -f "$CLAUDE_PROJECT_DIR/.cantiere-deny" ]; then
+  bash_hook 'gh api repos/OwnConsent/cmp/contents/x'  guard-paths.sh deny
+else
+  printf "  ${X}--${N}    %-52s .cantiere-deny assente: niente da verificare\n" "elenco esplicito del progetto"
+fi
 bash_hook 'find .. -name .env'                        guard-paths.sh deny
 
 echo; echo "Codice Python — // e stringhe assolute non sono percorsi (falso positivo del 13/09)"
@@ -100,6 +118,54 @@ file_hook "$ESCA" guard-secrets.sh deny
 printf 'export const PORT = 3000;\n' > "$ESCA"
 file_hook "$ESCA" guard-secrets.sh pass
 rm -f "$ESCA"
+
+
+echo; echo "Firma dei commit — su repo usa e getta, mai su questo"
+# Il difetto del 13/09: il marcatore stava in .work/, che dentro una worktree
+# collegata non esiste, e i commit dei subagenti con isolation: worktree
+# uscivano senza firma. Qui si verifica che firmi da entrambe le radici, e che
+# senza marcatore NON firmi — un commit di una persona non e' di un agente.
+firma_prova() { # etichetta, dove-committa(principale|worktree|niente), atteso
+  local T R esito val
+  T=$(mktemp -d); R="$T/repo"; mkdir -p "$R"
+  git -C "$R" init -q -b main >/dev/null 2>&1
+  git -C "$R" config user.email prova@cantiere.invalid
+  git -C "$R" config user.name prova
+  mkdir -p "$R/githooks"
+  cp "$H/../../../template/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
+    || cp "$PWD/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
+    || { printf "  ${X}KO${N}    %-52s hook prepare-commit-msg non trovato\n" "$1"; KO=$((KO+1)); rm -rf "$T"; return; }
+  chmod +x "$R/githooks/prepare-commit-msg"
+  git -C "$R" config core.hooksPath githooks
+  echo a > "$R/a"; git -C "$R" add -A; git -C "$R" commit -qm base >/dev/null 2>&1
+  [ "$2" != niente ] && printf 'backend' > "$R/.git/cantiere-current-agent"
+  case "$2" in
+    worktree)
+      git -C "$R" worktree add -q "$T/wt" -b lotto >/dev/null 2>&1
+      echo b > "$T/wt/b"; git -C "$T/wt" add -A
+      git -C "$T/wt" commit -qm "feat: x" >/dev/null 2>&1
+      val=$(git -C "$T/wt" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n') ;;
+    *)
+      echo c > "$R/c"; git -C "$R" add -A
+      git -C "$R" commit -qm "feat: x" >/dev/null 2>&1
+      val=$(git -C "$R" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n') ;;
+  esac
+  [ -n "$val" ] && esito="$val" || esito="niente"
+  if [ "$esito" = "$3" ]; then
+    printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
+  else
+    printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1))
+  fi
+  rm -rf "$T"
+}
+if command -v git >/dev/null 2>&1; then
+  firma_prova 'commit dalla checkout principale'  principale backend
+  firma_prova 'commit da una worktree collegata'  worktree   backend
+  firma_prova 'commit senza marcatore (persona)'  niente     niente
+else
+  printf "  ${X}KO${N}    %-52s git non installato\n" "firma dei commit"; KO=$((KO+1))
+fi
+
 
 echo
 if [ "$KO" -eq 0 ]; then

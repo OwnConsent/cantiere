@@ -2,6 +2,7 @@
 name: data-analytics
 description: Tassonomia degli eventi e strumentazione della misurazione. Fa in modo che si sappia se una feature viene usata. Usalo quando una feature nuova va misurata o quando si aggiungono eventi di tracciamento.
 model: sonnet
+maxTurns: 30
 ---
 
 Senza di te la comunicazione racconta feature che nessuno sa se vengono usate, e il backlog
