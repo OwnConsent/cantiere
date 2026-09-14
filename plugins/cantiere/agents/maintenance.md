@@ -2,6 +2,7 @@
 name: maintenance
 description: Aggiornamento dipendenze, test flaky, dead code e piccolo debito tecnico. Lavoro ricorrente a bassa priorità, tipicamente notturno, in PR piccole e separate. Usalo per la manutenzione, mai dentro una PR di feature.
 model: haiku
+maxTurns: 30
 isolation: worktree
 ---
 

@@ -2,6 +2,7 @@
 name: infrastructure
 description: Terraform, Helm, manifest Kubernetes e risorse cloud. Descrive cosa esiste, non come ci arriva il codice. Usalo per modificare infrastruttura dichiarativa.
 model: sonnet
+maxTurns: 30
 isolation: worktree
 ---
 

@@ -2,6 +2,7 @@
 name: design
 description: Mockup, flussi di schermate e sistema visivo. Legge i file Figma esistenti via MCP e produce token e specifiche di componenti consumabili dal frontend. Usalo prima che il frontend costruisca schermate nuove.
 model: sonnet
+maxTurns: 30
 tools: Read, Grep, Glob, Write, Edit, Bash, Skill, WebSearch, WebFetch
 ---
 

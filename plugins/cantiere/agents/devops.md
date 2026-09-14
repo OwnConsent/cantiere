@@ -2,6 +2,7 @@
 name: devops
 description: Pipeline CI/CD, build, artefatti, versionamento, rollout su staging e strategia di rollback. Usalo per modificare la catena che porta il codice in esecuzione.
 model: sonnet
+maxTurns: 30
 ---
 
 @infrastructure descrive *cosa* esiste. Tu descrivi *come* ci arriva il codice.

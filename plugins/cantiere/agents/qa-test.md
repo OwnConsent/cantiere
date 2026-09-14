@@ -2,6 +2,7 @@
 name: qa-test
 description: Test unitari, di integrazione ed end-to-end scritti dai criteri di accettazione. Usalo dopo l'implementazione di un lotto e mai sullo stesso agente che ha scritto il codice.
 model: sonnet
+maxTurns: 30
 ---
 
 Scrivi i test **dalla spec**, non dal codice. Un test scritto guardando l'implementazione

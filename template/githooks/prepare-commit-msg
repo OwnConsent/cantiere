@@ -6,6 +6,8 @@
 #   Co-Authored-By: ...         visibile come co-autore nell'interfaccia GitHub
 #
 # Attivalo una volta per repository:  git config core.hooksPath githooks
+# Vale anche per le worktree collegate: core.hooksPath e' una config del repo,
+# e il marcatore ora sta in .git/ condiviso (vedi sotto).
 set -uo pipefail
 MSG_FILE="$1"
 SORGENTE="${2:-}"
@@ -13,11 +15,37 @@ SORGENTE="${2:-}"
 # non toccare merge, squash, amend con messaggio già pronto
 case "$SORGENTE" in merge|squash) exit 0 ;; esac
 
+# --- risoluzione del marcatore di ruolo -----------------------------------
+# Il marcatore NON puo' stare in .work/: una worktree collegata ha la sua
+# radice e li' .work/ non esiste, quindi i commit fatti da un subagente con
+# isolation: worktree uscivano senza firma (osservato il 13/09 sui commit
+# cb481f5 e b3dcc26).
+# git rev-parse --git-common-dir restituisce la stessa cartella .git per la
+# checkout principale e per ogni worktree collegata: e' l'unico posto che
+# tutte vedono. Sta dentro .git/, quindi non e' tracciato e non puo' finire
+# in un commit per sbaglio.
+marcatore_ruolo() {
+  local comune=""
+  comune=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || comune=""
+  if [ -z "$comune" ]; then   # git < 2.31: nessun --path-format
+    comune=$(git rev-parse --git-common-dir 2>/dev/null) || comune=""
+    [ -n "$comune" ] && comune=$(cd "$comune" 2>/dev/null && pwd) || comune=""
+  fi
+  if [ -n "$comune" ] && [ -d "$comune" ]; then
+    printf '%s/cantiere-current-agent\n' "$comune"
+  else
+    printf '.work/.current-agent\n'   # fuori da un repo: comportamento di prima
+  fi
+}
+
 # Nessun marcatore = nessuna sessione aperta = il commit e' di una persona.
 # Non si firma: attribuire a un agente il lavoro di un umano falsa il registro
 # tanto quanto il contrario.
-[ -f .work/.current-agent ] || exit 0
-AGENTE=$(cat .work/.current-agent 2>/dev/null || echo "")
+MARCATORE=$(marcatore_ruolo)
+AGENTE=""
+[ -f "$MARCATORE" ] && AGENTE=$(cat "$MARCATORE" 2>/dev/null || echo "")
+# compatibilita' con le sessioni aperte prima del fix del 14/09
+[ -z "$AGENTE" ] && [ -f .work/.current-agent ] && AGENTE=$(cat .work/.current-agent 2>/dev/null || echo "")
 [ -z "$AGENTE" ] && exit 0
 
 # se la firma c'è già (rebase, amend), non duplicarla

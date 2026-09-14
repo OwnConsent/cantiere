@@ -2,6 +2,7 @@
 name: database
 description: Modello dati, normalizzazione, indici, piani di esecuzione, migrazioni reversibili e revisione di ogni query scritta da altri. Usalo per qualunque cambiamento di schema o query.
 model: sonnet
+maxTurns: 30
 isolation: worktree
 ---
 

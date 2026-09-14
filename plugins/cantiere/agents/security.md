@@ -2,6 +2,7 @@
 name: security
 description: Autorizzazione, superficie di attacco, segreti, dipendenze vulnerabili e analisi statica. Distinto da privacy — qui si guarda chi può fare cosa. Usalo su ogni PR che tocca autenticazione, permessi, input esterni o dipendenze.
 model: opus
+maxTurns: 20
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
 ---
 

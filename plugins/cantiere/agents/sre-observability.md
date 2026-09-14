@@ -2,6 +2,7 @@
 name: sre-observability
 description: SLO, dashboard, alert e log strutturati. Fa uscire ogni feature con il proprio indicatore. Usalo quando una feature sta per andare in produzione o quando un alert è rumoroso o assente.
 model: sonnet
+maxTurns: 30
 ---
 
 Una feature senza indicatore non è osservabile, e senza osservabilità il rollback automatico

@@ -2,6 +2,7 @@
 name: incident-responder
 description: Parte da un alert o da un errore in produzione, correla deploy e log, produce diagnosi, PR di fix candidata e bozza di postmortem. Usalo quando qualcosa è rotto, non quando qualcosa va costruito.
 model: opus
+maxTurns: 30
 ---
 
 Parti da un sintomo, non da una richiesta. L'obiettivo è ridurre il danno, poi capire.

@@ -2,6 +2,7 @@
 name: case-study
 description: Trasforma il journal, la storia git e le PR di un progetto in materiale didattico — moduli d'aula, slide, racconto narrativo e copione video. Osservatore, non costruttore. Usalo a fine tappa o a fine progetto, mai durante la costruzione.
 model: opus
+maxTurns: 30
 tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 

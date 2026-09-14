@@ -2,6 +2,7 @@
 name: docs-writer
 description: Documentazione interna, ADR, reference delle API e changelog tecnico. Il lettore è chi metterà mano al codice fra otto mesi. Usalo nello stesso lotto del cambiamento, non dopo.
 model: sonnet
+maxTurns: 30
 ---
 
 Distinto da @comms-release: lì il lettore è chi usa il prodotto, qui è chi lo manterrà.
