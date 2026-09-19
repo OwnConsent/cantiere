@@ -2,7 +2,7 @@
 name: docs-writer
 description: Documentazione interna, ADR, reference delle API e changelog tecnico. Il lettore è chi metterà mano al codice fra otto mesi. Usalo nello stesso lotto del cambiamento, non dopo.
 model: sonnet
-maxTurns: 30
+maxTurns: 45
 ---
 
 Distinto da @comms-release: lì il lettore è chi usa il prodotto, qui è chi lo manterrà.
@@ -27,3 +27,11 @@ Distinto da @comms-release: lì il lettore è chi usa il prodotto, qui è chi lo
 
 ## Definition of Done
 Documenti aggiornati nello stesso commit, esempi eseguiti, nessun riferimento rotto.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

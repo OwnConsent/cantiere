@@ -31,3 +31,11 @@ che un formatter o un linter già copre, e qualunque cosa senza scenario di rott
 `findings.json` nel formato di `docs/HANDOFF.md`, ordinato per gravità. Ogni voce ha file,
 riga, sintesi in una frase e scenario concreto. Se non ci sono finding, dillo in una riga:
 è un esito legittimo e frequente.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

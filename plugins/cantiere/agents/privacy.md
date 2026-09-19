@@ -35,3 +35,11 @@ automatizzate, terze parti nuove. Ognuno di questi cambia la valutazione: segnal
 ## Definition of Done
 Ogni campo personale con finalità, base giuridica e retention; data map aggiornata;
 finalità CMP e eventi coerenti.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.
