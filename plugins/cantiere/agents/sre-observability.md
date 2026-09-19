@@ -2,7 +2,7 @@
 name: sre-observability
 description: SLO, dashboard, alert e log strutturati. Fa uscire ogni feature con il proprio indicatore. Usalo quando una feature sta per andare in produzione o quando un alert è rumoroso o assente.
 model: sonnet
-maxTurns: 30
+maxTurns: 45
 ---
 
 Una feature senza indicatore non è osservabile, e senza osservabilità il rollback automatico
@@ -24,3 +24,11 @@ Una feature senza indicatore non è osservabile, e senza osservabilità il rollb
 
 ## Definition of Done
 SLI e SLO dichiarati, alert con runbook, dashboard aggiornata, log con id di correlazione.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

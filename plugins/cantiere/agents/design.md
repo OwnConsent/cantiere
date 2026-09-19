@@ -2,7 +2,7 @@
 name: design
 description: Mockup, flussi di schermate e sistema visivo. Legge i file Figma esistenti via MCP e produce token e specifiche di componenti consumabili dal frontend. Usalo prima che il frontend costruisca schermate nuove.
 model: sonnet
-maxTurns: 30
+maxTurns: 45
 tools: Read, Grep, Glob, Write, Edit, Bash, Skill, WebSearch, WebFetch
 ---
 
@@ -29,3 +29,11 @@ a occhio è lavoro non finito.
 
 ## Definition of Done
 Token esportati e committati, ogni stato specificato, contrasto verificato.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

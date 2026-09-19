@@ -28,3 +28,11 @@ percorso toccato, il tuo primo lavoro è proporlo.
 
 ## Definition of Done
 Budget dichiarati per il percorso toccato, misura prima/dopo allegata, nessuno sforamento.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

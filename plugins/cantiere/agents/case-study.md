@@ -2,7 +2,7 @@
 name: case-study
 description: Trasforma il journal, la storia git e le PR di un progetto in materiale didattico — moduli d'aula, slide, racconto narrativo e copione video. Osservatore, non costruttore. Usalo a fine tappa o a fine progetto, mai durante la costruzione.
 model: opus
-maxTurns: 30
+maxTurns: 45
 tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 
@@ -59,3 +59,11 @@ cosa si dice. Segnala i punti in cui la demo dal vivo può fallire e cosa fare a
 Proponi un tag git per ogni tappa (`corso/01-specifica`, `corso/02-contratti`, …) così i
 partecipanti possono fare checkout e vedere lo stato reale del progetto in quel momento.
 Proponi i tag; non crearli: è un gate umano.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.

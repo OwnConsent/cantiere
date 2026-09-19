@@ -4,7 +4,8 @@
 Quattro livelli:
   1. credenziali — sempre, non configurabile;
   2. percorsi vietati elencati in .cantiere-deny alla radice del progetto;
-  3. token che, risolti, cadono fuori dal progetto e fuori dalle cartelle di sistema;
+  3. token che, risolti, cadono fuori dal progetto e fuori dalle cartelle di sistema,
+     e che esistono o potrebbero essere creati;
   4. risalite ../ cercate nel comando intero, corpi di codice compresi.
 
 Il livello 3 salta i token che contengono spazi: un corpo di codice (python3 -c,
@@ -69,17 +70,17 @@ def main():
                 deny(f"riferimento a '{voce}'")
 
     # 3 — token che sono percorsi.
-    # Si segmenta PRIMA sui separatori di shell: shlex non spezza sul ";", quindi
-    # `cd /percorso; cat x` produrrebbe il token "/percorso;" — con il punto e
-    # virgola attaccato — che non esiste e risulta fuori progetto.
-    # Falso positivo osservato il 13/09, due letture bloccate a L00.
-    segmenti = re.split(r"&&|\|\||[;|&\n]", cmd)
-    tokens = []
-    for seg in segmenti:
-        try:
-            tokens.extend(shlex.split(seg, comments=False))
-        except ValueError:
-            tokens.extend(re.split(r"\s+", seg))
+    # shlex con punctuation_chars tratta ; | & < > come token a se' MA rispetta le
+    # virgolette: risolve insieme i due falsi positivi visti finora.
+    #   13/09  `cd /percorso; cat x` -> senza questo, il token era "/percorso;"
+    #   15/09  `grep -E '/^area (site|api)/'` -> spezzare a mano sul "|" rompeva
+    #          una regex fra virgolette, shlex falliva e il token diventava "'/^area"
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        tokens = re.split(r"\s+", cmd)
 
     # Argomenti che per definizione sono TESTO, non percorsi: il corpo di un
     # commento, un messaggio di commit, un titolo. Analizzarli come percorsi ha
@@ -119,7 +120,17 @@ def main():
         if resolved == home:
             continue
         if fuori_perimetro(resolved, project):
-            deny(f"il percorso '{raw}' porta fuori dal progetto ({resolved})")
+            # Un percorso fuori progetto fa danno solo se si puo' toccare: o esiste
+            # (lo si puo' leggere), o esiste la cartella che lo conterrebbe (ci si
+            # puo' scrivere). Un token che non soddisfa nessuna delle due non e' un
+            # percorso di questa macchina: e' testo che comincia per "/".
+            # Tre falsi positivi osservati il 15/09 — due regex (/FAIL/p, /^area/)
+            # e un percorso del runner di GitHub letto dentro un log
+            # (/home/runner/work/...), che qui non esiste.
+            # Le risalite ../ restano negate SEMPRE dal livello 4, esistenti o no:
+            # uscire esplicitamente dal progetto e' sospetto di per se'.
+            if os.path.exists(resolved) or os.path.isdir(os.path.dirname(resolved)):
+                deny(f"il percorso '{raw}' porta fuori dal progetto ({resolved})")
 
     # 4 — risalite ../ ovunque, anche dentro il codice
     for m in re.finditer(r"(?:\.\./)+[\w./\-]*", cmd):

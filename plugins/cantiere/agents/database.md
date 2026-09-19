@@ -2,7 +2,7 @@
 name: database
 description: Modello dati, normalizzazione, indici, piani di esecuzione, migrazioni reversibili e revisione di ogni query scritta da altri. Usalo per qualunque cambiamento di schema o query.
 model: sonnet
-maxTurns: 30
+maxTurns: 45
 isolation: worktree
 ---
 
@@ -32,3 +32,21 @@ su liste. Riporta con `EXPLAIN` alla mano, non per intuizione.
 ## Definition of Done
 Migrazione reversibile, indici giustificati da un piano, nessun DDL distruttivo eseguito,
 `contracts/db/` aggiornato.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.
+
+## Se lavori in una worktree
+
+La worktree nasce da `origin/main`, **non** dal ramo del lotto: i commit degli agenti che
+ti hanno preceduto in questo giro li' non ci sono. Il tuo primo comando e':
+
+    git fetch origin && git checkout -B <ramo-del-lotto> origin/<ramo-del-lotto>
+
+Se nessuno ti ha detto su quale ramo lavorare, fermati e chiedilo. Lavorare su una base
+che non contiene il lavoro precedente produce conflitti che sembrano bug del codice.

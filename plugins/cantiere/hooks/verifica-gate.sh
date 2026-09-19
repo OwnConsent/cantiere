@@ -103,6 +103,17 @@ bash_hook 'git commit -m "docs: soglie 150 ms / 1,6 Mbps"'                  guar
 bash_hook 'gh pr create --title "perf / soglie" --body "sezione 3 / 4"'     guard-paths.sh pass
 bash_hook 'gh pr comment 17 --body "$(cat ../cmp/.env)"'                    guard-paths.sh deny
 
+
+echo; echo "Testo che comincia per / non e' un percorso (falso positivo del 15/09)"
+bash_hook "sed -n '/FAIL/p' log.txt"                    guard-paths.sh pass
+bash_hook "grep -E '/^area (site|api)/' log.txt"        guard-paths.sh pass
+bash_hook 'gh run view 123 --log | grep /home/runner/work/x/y' guard-paths.sh pass
+bash_hook 'cat /home/runner/work/ownconsent/ci.log'     guard-paths.sh pass
+bash_hook 'cat /etc/hostname'                           guard-paths.sh pass
+bash_hook "cp segreto.txt $HOME/uscita.txt"             guard-paths.sh deny
+bash_hook 'cat ../cmp/.env'                             guard-paths.sh deny
+bash_hook 'cd ../cmp; cat .env'                          guard-paths.sh deny
+
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass
 bash_hook 'go test -race ./...'                       guard-paths.sh pass

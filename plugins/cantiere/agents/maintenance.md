@@ -2,7 +2,7 @@
 name: maintenance
 description: Aggiornamento dipendenze, test flaky, dead code e piccolo debito tecnico. Lavoro ricorrente a bassa priorità, tipicamente notturno, in PR piccole e separate. Usalo per la manutenzione, mai dentro una PR di feature.
 model: haiku
-maxTurns: 30
+maxTurns: 45
 isolation: worktree
 ---
 
@@ -26,3 +26,21 @@ Il lavoro noioso che nessuno fa e che dopo sei mesi rende non autonomo tutto il 
 
 ## Definition of Done
 PR piccola, verde, con una sola ragione di esistere, descritta in tre righe.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.
+
+## Se lavori in una worktree
+
+La worktree nasce da `origin/main`, **non** dal ramo del lotto: i commit degli agenti che
+ti hanno preceduto in questo giro li' non ci sono. Il tuo primo comando e':
+
+    git fetch origin && git checkout -B <ramo-del-lotto> origin/<ramo-del-lotto>
+
+Se nessuno ti ha detto su quale ramo lavorare, fermati e chiedilo. Lavorare su una base
+che non contiene il lavoro precedente produce conflitti che sembrano bug del codice.

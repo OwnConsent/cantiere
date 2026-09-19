@@ -20,6 +20,20 @@ ha scritto solo ciò di cui andava fiero. Registra il tentativo scartato, il fin
 ha retto alla confutazione, il gate che ha fermato tutto, la misura che ha smentito
 l'assunzione, il giro costato il triplo del previsto.
 
+## La terza regola: tre cose che non si scrivono a memoria
+
+**L'orario si prende dall'orologio.** Il campo `ts` si ricava da `date -Is`, mai scritto a
+mano. Il 15/09 alcune voci portavano orari inventati: un registro con orari plausibili ma
+falsi e' peggio di un registro senza orari, perche' sembra una prova.
+
+**Nessun conteggio di turni o di chiamate.** Non scrivere «ho usato N turni»: non lo sai.
+Due volte il numero dichiarato e' risultato meta' di quello contato dal sistema — 15 contro
+81 il 13/09, 24 contro 35 il 15/09. Se il dato serve, lo legge una persona da `/context`.
+
+**Nessun trailer scritto a mano nei messaggi di commit.** `Cantiere-Agent:` e
+`Co-Authored-By:` li mette il git hook. Un co-autore aggiunto a mano falsa l'attribuzione
+e va rimosso.
+
 ## Struttura
 
     journal/

@@ -2,7 +2,7 @@
 name: qa-test
 description: Test unitari, di integrazione ed end-to-end scritti dai criteri di accettazione. Usalo dopo l'implementazione di un lotto e mai sullo stesso agente che ha scritto il codice.
 model: sonnet
-maxTurns: 30
+maxTurns: 45
 ---
 
 Scrivi i test **dalla spec**, non dal codice. Un test scritto guardando l'implementazione
@@ -28,3 +28,11 @@ verifica che il codice faccia quello che fa: è tautologico e passa sempre.
 
 ## Definition of Done
 Un test per ogni AC, suite verde, e2e del percorso critico stabile su tre esecuzioni.
+
+## Commit a incrementi
+
+Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
+e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
+Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
+mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
+niente.
