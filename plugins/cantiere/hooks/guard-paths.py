@@ -26,9 +26,18 @@ CRED = [
     (r"\.ssh/", "chiavi SSH"), (r"\.aws/", "credenziali AWS"),
     (r"\.kube/config", "kubeconfig"), (r"\.config/gh/", "token GitHub CLI"),
     (r"\.docker/config\.json", "credenziali Docker"), (r"\.gnupg/", "chiavi GPG"),
-    (r"\.netrc", "netrc"), (r"\.npmrc", "npmrc"),
     (r"\bid_rsa\b", "chiave privata"), (r"\bid_ed25519\b", "chiave privata"),
 ]
+
+
+# .npmrc e .netrc sono credenziali solo nella home dell'utente: li' stanno i token del
+# registry e le password FTP. Un .npmrc DENTRO il progetto e' configurazione normale —
+# site/.npmrc contiene only-built-dependencies[]=esbuild — e fino al 21/09 veniva
+# bloccato lo stesso, lasciando un agente senza modo di leggere la propria build.
+# Si negano quindi le forme che puntano alla home, e ogni token che risolto cade fuori
+# dal progetto; quelli dentro il progetto passano.
+CRED_HOME = re.compile(r"(~|\$HOME|\$\{HOME\})/\.(npmrc|netrc)\b")
+CRED_NOMI = (".npmrc", ".netrc")
 
 
 def deny(msg):
@@ -61,13 +70,25 @@ def main():
         if re.search(pat, cmd):
             deny(f"accesso a {what}")
 
+    m = CRED_HOME.search(cmd)
+    if m:
+        deny(f"accesso a {m.group(0)} (credenziali dell'utente)")
+
     # 2 — elenco esplicito del progetto
-    deny_file = os.path.join(project, ".cantiere-deny")
-    if os.path.isfile(deny_file):
+    # .cantiere-deny e' committato e vale per tutti. .cantiere-deny.local NON si
+    # committa (sta in .gitignore) e vale solo per la worktree in cui si trova: serve
+    # a un lotto che non deve leggere un'area. Il 20/09 L07 doveva scrivere i test
+    # «senza leggere site/» e due agenti su cinque l'hanno letto durante un comando
+    # operativo: un divieto scritto nel mandato e' una buona intenzione, questo e' un
+    # rifiuto.
+    for nome in (".cantiere-deny", ".cantiere-deny.local"):
+        deny_file = os.path.join(project, nome)
+        if not os.path.isfile(deny_file):
+            continue
         for line in open(deny_file, encoding="utf-8", errors="replace"):
             voce = line.split("#", 1)[0].strip()
             if voce and voce.lower() in cmd.lower():
-                deny(f"riferimento a '{voce}'")
+                deny(f"riferimento a '{voce}' ({nome})")
 
     # 3 — token che sono percorsi.
     # shlex con punctuation_chars tratta ; | & < > come token a se' MA rispetta le
@@ -117,6 +138,8 @@ def main():
         expanded = os.path.expanduser(tok)
         resolved = os.path.realpath(expanded if os.path.isabs(expanded)
                                     else os.path.join(project, expanded))
+        if os.path.basename(resolved) in CRED_NOMI and fuori_perimetro(resolved, project):
+            deny(f"accesso a {raw} (credenziali fuori dal progetto)")
         if resolved == home:
             continue
         if fuori_perimetro(resolved, project):

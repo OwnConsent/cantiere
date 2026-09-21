@@ -132,51 +132,74 @@ rm -f "$ESCA"
 
 
 echo; echo "Firma dei commit — su repo usa e getta, mai su questo"
-# Il difetto del 13/09: il marcatore stava in .work/, che dentro una worktree
-# collegata non esiste, e i commit dei subagenti con isolation: worktree
-# uscivano senza firma. Qui si verifica che firmi da entrambe le radici, e che
-# senza marcatore NON firmi — un commit di una persona non e' di un agente.
-firma_prova() { # etichetta, dove-committa(principale|worktree|niente), atteso
-  local T R esito val
+# Dal 21/09 il ruolo arriva nella variabile CANTIERE_AGENT, che agent-env.py
+# antepone ai comandi git. Si verifica la catena intera: payload di PreToolUse ->
+# comando riscritto -> git hook -> trailer riconosciuto da git.
+firma_prova() { # etichetta, agent_type (vuoto = filo principale, "-" = nessuna sessione), atteso
+  local T R val cmd
   T=$(mktemp -d); R="$T/repo"; mkdir -p "$R"
   git -C "$R" init -q -b main >/dev/null 2>&1
-  git -C "$R" config user.email prova@cantiere.invalid
-  git -C "$R" config user.name prova
+  git -C "$R" config user.email prova@cantiere.invalid; git -C "$R" config user.name prova
   mkdir -p "$R/githooks"
   cp "$H/../../../template/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
     || cp "$PWD/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
-    || { printf "  ${X}KO${N}    %-52s hook prepare-commit-msg non trovato\n" "$1"; KO=$((KO+1)); rm -rf "$T"; return; }
-  chmod +x "$R/githooks/prepare-commit-msg"
-  git -C "$R" config core.hooksPath githooks
+    || { printf "  ${X}KO${N}    %-52s prepare-commit-msg non trovato\n" "$1"; KO=$((KO+1)); rm -rf "$T"; return; }
+  chmod +x "$R/githooks/prepare-commit-msg"; git -C "$R" config core.hooksPath githooks
   echo a > "$R/a"; git -C "$R" add -A; git -C "$R" commit -qm base >/dev/null 2>&1
-  [ "$2" != niente ] && printf 'backend' > "$R/.git/cantiere-current-agent"
-  case "$2" in
-    worktree)
-      git -C "$R" worktree add -q "$T/wt" -b lotto >/dev/null 2>&1
-      echo b > "$T/wt/b"; git -C "$T/wt" add -A
-      git -C "$T/wt" commit -qm "feat: x" >/dev/null 2>&1
-      val=$(git -C "$T/wt" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n') ;;
-    *)
-      echo c > "$R/c"; git -C "$R" add -A
-      git -C "$R" commit -qm "feat: x" >/dev/null 2>&1
-      val=$(git -C "$R" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n') ;;
-  esac
-  [ -n "$val" ] && esito="$val" || esito="niente"
-  if [ "$esito" = "$3" ]; then
-    printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
-  else
-    printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1))
+  git -C "$R" worktree add -q "$T/wt" -b lotto >/dev/null 2>&1
+  cmd="cd '$T/wt' && echo b > b && git add -A && git commit -qm 'feat: x'"
+  if [ "$2" != "-" ]; then
+    cmd=$(printf '{"agent_type":"%s","tool_input":{"command":%s}}' "$2" \
+          "$(printf '%s' "$cmd" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))')" \
+          | python3 "$H/agent-env.py" \
+          | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])')
   fi
+  env -u CANTIERE_AGENT bash -c "$cmd" >/dev/null 2>&1
+  val=$(git -C "$T/wt" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n')
+  [ -n "$val" ] || val="niente"
+  if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
   rm -rf "$T"
 }
 if command -v git >/dev/null 2>&1; then
-  firma_prova 'commit dalla checkout principale'  principale backend
-  firma_prova 'commit da una worktree collegata'  worktree   backend
-  firma_prova 'commit senza marcatore (persona)'  niente     niente
+  firma_prova 'subagente, in una worktree'           'cantiere:qa-test' qa-test
+  firma_prova 'filo principale, in una worktree'     ''                 orchestrator
+  firma_prova 'commit a mano, fuori da Claude Code'  '-'                niente
 else
   printf "  ${X}KO${N}    %-52s git non installato\n" "firma dei commit"; KO=$((KO+1))
 fi
 
+echo; echo "Credenziali: la home si', il progetto no (21/09)"
+bash_hook 'cat site/.npmrc'                            guard-paths.sh pass
+bash_hook 'cat ~/.npmrc'                               guard-paths.sh deny
+bash_hook 'cat $HOME/.netrc'                           guard-paths.sh deny
+
+echo; echo "Troppo lavoro non committato: la scrittura si ferma"
+TC=$(mktemp -d); git -C "$TC" init -q -b main
+for n in $(seq 1 19); do echo x > "$TC/f$n"; done
+file_hook "$TC/nuovo.txt" guard-commit.sh pass
+echo x > "$TC/f20"
+file_hook "$TC/nuovo.txt" guard-commit.sh deny
+rm -rf "$TC"
+
+echo; echo "Journal: conta il lavoro di questa sessione, non quello trovato sporco (20/09)"
+journal_prova() { # etichetta, cosa fare dopo la foto, atteso(block|pass)
+  local T r esito
+  T=$(mktemp -d)
+  ( cd "$T" && git init -q -b main && git config user.email t@t.invalid && git config user.name T \
+    && mkdir -p site journal && echo a > site/a.md && git add -A && git commit -qm base \
+    && echo "di un'altra sessione" >> site/a.md \
+    && echo '{"session_id":"PROVA"}' | bash "$H/session-start.sh" >/dev/null 2>&1 \
+    && eval "$2" )
+  r=$(cd "$T" && echo '{"session_id":"PROVA"}' | bash "$H/journal-check.sh" 2>/dev/null)
+  case "$r" in *'"block"'*) esito=block ;; *) esito=pass ;; esac
+  if [ "$esito" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+journal_prova 'sola lettura, file gia sporco prima'  'true'                                   pass
+journal_prova 'lavoro nuovo senza journal'           'echo b > site/b.md'                     block
+journal_prova 'lavoro nuovo con journal'             'echo b > site/b.md; echo {} > journal/x.json' pass
 
 echo
 if [ "$KO" -eq 0 ]; then

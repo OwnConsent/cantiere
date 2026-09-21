@@ -1,65 +1,43 @@
 #!/usr/bin/env bash
 # Firma ogni commit con il ruolo che lo ha prodotto.
 #
-# Aggiunge due righe in coda al messaggio:
 #   Cantiere-Agent: <ruolo>     leggibile a macchina, si cerca con git log --grep
 #   Co-Authored-By: ...         visibile come co-autore nell'interfaccia GitHub
 #
+# Il ruolo arriva nella variabile CANTIERE_AGENT, che l'hook agent-env.py del plugin
+# antepone a ogni comando git lanciato da Claude Code: il nome del subagente, oppure
+# «orchestrator» per il filo principale. Viaggia con il processo, quindi funziona in
+# qualunque worktree e non si mescola fra sessioni parallele.
+#
+# Variabile assente = il commit non viene da Claude Code = e' di una persona, e non
+# si firma. Attribuire a un agente il lavoro di un umano falsa il registro tanto
+# quanto il contrario.
+#
+# Storia: fino al 20/09 il ruolo stava in un file-marcatore condiviso. Si
+# sovrascriveva fra sessioni parallele e ogni SubagentStop annidato lo riazzerava:
+# per giorni quasi tutti i commit risultavano «orchestrator».
+#
 # Attivalo una volta per repository:  git config core.hooksPath githooks
-# Vale anche per le worktree collegate: core.hooksPath e' una config del repo,
-# e il marcatore ora sta in .git/ condiviso (vedi sotto).
 set -uo pipefail
 MSG_FILE="$1"
 SORGENTE="${2:-}"
 
-# non toccare merge, squash, amend con messaggio già pronto
 case "$SORGENTE" in merge|squash) exit 0 ;; esac
 
-# --- risoluzione del marcatore di ruolo -----------------------------------
-# Il marcatore NON puo' stare in .work/: una worktree collegata ha la sua
-# radice e li' .work/ non esiste, quindi i commit fatti da un subagente con
-# isolation: worktree uscivano senza firma (osservato il 13/09 sui commit
-# cb481f5 e b3dcc26).
-# git rev-parse --git-common-dir restituisce la stessa cartella .git per la
-# checkout principale e per ogni worktree collegata: e' l'unico posto che
-# tutte vedono. Sta dentro .git/, quindi non e' tracciato e non puo' finire
-# in un commit per sbaglio.
-marcatore_ruolo() {
-  local comune=""
-  comune=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || comune=""
-  if [ -z "$comune" ]; then   # git < 2.31: nessun --path-format
-    comune=$(git rev-parse --git-common-dir 2>/dev/null) || comune=""
-    [ -n "$comune" ] && comune=$(cd "$comune" 2>/dev/null && pwd) || comune=""
-  fi
-  if [ -n "$comune" ] && [ -d "$comune" ]; then
-    printf '%s/cantiere-current-agent\n' "$comune"
-  else
-    printf '.work/.current-agent\n'   # fuori da un repo: comportamento di prima
-  fi
-}
-
-# Nessun marcatore = nessuna sessione aperta = il commit e' di una persona.
-# Non si firma: attribuire a un agente il lavoro di un umano falsa il registro
-# tanto quanto il contrario.
-MARCATORE=$(marcatore_ruolo)
-AGENTE=""
-[ -f "$MARCATORE" ] && AGENTE=$(cat "$MARCATORE" 2>/dev/null || echo "")
-# compatibilita' con le sessioni aperte prima del fix del 14/09
-[ -z "$AGENTE" ] && [ -f .work/.current-agent ] && AGENTE=$(cat .work/.current-agent 2>/dev/null || echo "")
+AGENTE="${CANTIERE_AGENT:-}"
 [ -z "$AGENTE" ] && exit 0
+# difesa: solo un nome di ruolo, mai altro testo dentro il messaggio
+[[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
 
-# se la firma c'è già (rebase, amend), non duplicarla
+# se la firma c'e' gia' (rebase, amend), non duplicarla
 grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
 
-# git riconosce i trailer solo se stanno nell'ULTIMO paragrafo. Se il messaggio
-# finisce gia' con una riga vuota, aggiungerli in coda ne fa un paragrafo a se' e
-# git non li vede piu': osservato sul commit d5e8331 del 13/09.
+# git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
+# con zero li legge come corpo, con due come paragrafo a se' (commit d5e8331, 13/09).
 python3 - "$MSG_FILE" <<'PY_EOF'
-import sys, re
+import sys
 f = sys.argv[1]
 testo = open(f, encoding="utf-8", errors="replace").read()
-# esattamente UNA riga vuota prima dei trailer: senza, git li legge come corpo;
-# con due o piu', li considera un paragrafo a se' e non li riconosce.
 open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
 PY_EOF
 

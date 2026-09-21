@@ -32,7 +32,23 @@ Budget dichiarati per il percorso toccato, misura prima/dopo allegata, nessuno s
 ## Commit a incrementi
 
 Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
-e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
-Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
-mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
-niente.
+e' una misura. Committa e pusha man mano, su un ramo di lavoro. Dal 21/09 c'e' anche un
+meccanismo: oltre 20 file non committati, l'hook guard-commit rifiuta la scrittura
+successiva finche' non committi. Non aggirarlo: e' li' perche' nove agenti su nove, il
+19-20/09, sono arrivati al tetto e chi non aveva committato ha perso tutto.
+
+## Orari nel journal
+
+Il campo `ts` di ogni voce e' l'output di `date -Is` eseguito in quel momento, mai
+scritto a memoria. Il 20/09 nove orari scritti a memoria, uno con 44 minuti di scarto;
+l'agente che aveva questa riga nel mandato li ha avuti esatti al secondo.
+
+## Consegna parziale
+
+Scrivi ogni finding su file appena lo trovi, non alla fine: un finding che vive solo nel
+tuo contesto sparisce quando arriva il tetto dei turni. Il 21/09 cinque revisori su
+cinque l'hanno toccato senza aver consegnato una riga, con la cartella di lavoro vuota.
+
+Fermati a fine perimetro, o quando hai il numero di finding che il mandato fissa. Una
+copertura parziale DICHIARATA — cosa hai guardato e cosa no — e' una consegna valida; una
+copertura completa mai scritta non lo e'.

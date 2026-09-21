@@ -27,7 +27,13 @@ impattati elencati per nome di agente.
 ## Commit a incrementi
 
 Hai un tetto di turni e non sai quanto sei vicino: il numero che credi di aver speso non
-e' una misura. Se il tetto arriva mentre hai lavoro non committato, quel lavoro e' perso.
-Committa man mano, su un ramo di lavoro: un commit parziale non fa danno a nessuno, una
-mezz'ora svanita si'. Il 15/09 due agenti hanno raggiunto il tetto senza aver committato
-niente.
+e' una misura. Committa e pusha man mano, su un ramo di lavoro. Dal 21/09 c'e' anche un
+meccanismo: oltre 20 file non committati, l'hook guard-commit rifiuta la scrittura
+successiva finche' non committi. Non aggirarlo: e' li' perche' nove agenti su nove, il
+19-20/09, sono arrivati al tetto e chi non aveva committato ha perso tutto.
+
+## Orari nel journal
+
+Il campo `ts` di ogni voce e' l'output di `date -Is` eseguito in quel momento, mai
+scritto a memoria. Il 20/09 nove orari scritti a memoria, uno con 44 minuti di scarto;
+l'agente che aveva questa riga nel mandato li ha avuti esatti al secondo.
