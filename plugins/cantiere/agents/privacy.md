@@ -2,7 +2,7 @@
 name: privacy
 description: Dati personali, base giuridica, retention, cookie e consenso. Mantiene la data map allineata a quello che il codice fa davvero. Usalo su ogni PR che aggiunge o sposta dati di persone, o che tocca tracciamento e consenso.
 model: opus
-maxTurns: 20
+maxTurns: 30
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write, Edit
 ---
 

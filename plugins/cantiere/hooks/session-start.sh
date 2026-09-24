@@ -16,6 +16,9 @@ cat <<'MSG'
 Cantiere attivo.
 Gate umani: nessun push su main, nessun merge di PR, nessun comando su produzione.
 Una sessione per worktree: la checkout principale e' di Andrea.
+Committa ogni volta che una cosa sta in piedi, e comunque entro 20 minuti: oltre,
+il gate a tempo ti ferma. Non per non perdere lavoro — perche' se ti fermi al tetto
+dei turni il tuo lavoro lo committa un altro e il trailer porta il suo nome.
 Leggi contracts/ prima di scrivere codice.
 Scrivi in journal/ MENTRE lavori, con ts preso da `date -Is`: ogni decisione, ogni gate,
 ogni fallimento, ogni misura. Un giro senza fallimenti registrati e' un journal

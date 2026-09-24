@@ -3,7 +3,7 @@
 
 Quattro livelli:
   1. credenziali — sempre, non configurabile;
-  2. percorsi vietati elencati in .cantiere-deny alla radice del progetto;
+  2. percorsi vietati elencati in .cantiere-deny, cercati fra gli argomenti;
   3. token che, risolti, cadono fuori dal progetto e fuori dalle cartelle di sistema,
      e che esistono o potrebbero essere creati;
   4. risalite ../ cercate nel comando intero, corpi di codice compresi.
@@ -74,23 +74,8 @@ def main():
     if m:
         deny(f"accesso a {m.group(0)} (credenziali dell'utente)")
 
-    # 2 — elenco esplicito del progetto
-    # .cantiere-deny e' committato e vale per tutti. .cantiere-deny.local NON si
-    # committa (sta in .gitignore) e vale solo per la worktree in cui si trova: serve
-    # a un lotto che non deve leggere un'area. Il 20/09 L07 doveva scrivere i test
-    # «senza leggere site/» e due agenti su cinque l'hanno letto durante un comando
-    # operativo: un divieto scritto nel mandato e' una buona intenzione, questo e' un
-    # rifiuto.
-    for nome in (".cantiere-deny", ".cantiere-deny.local"):
-        deny_file = os.path.join(project, nome)
-        if not os.path.isfile(deny_file):
-            continue
-        for line in open(deny_file, encoding="utf-8", errors="replace"):
-            voce = line.split("#", 1)[0].strip()
-            if voce and voce.lower() in cmd.lower():
-                deny(f"riferimento a '{voce}' ({nome})")
-
-    # 3 — token che sono percorsi.
+    # Tokenizzazione, prima di tutto il resto: i livelli 2 e 3 lavorano sugli
+    # ARGOMENTI, non sul comando come stringa.
     # shlex con punctuation_chars tratta ; | & < > come token a se' MA rispetta le
     # virgolette: risolve insieme i due falsi positivi visti finora.
     #   13/09  `cd /percorso; cat x` -> senza questo, il token era "/percorso;"
@@ -103,15 +88,15 @@ def main():
     except ValueError:
         tokens = re.split(r"\s+", cmd)
 
-    # Argomenti che per definizione sono TESTO, non percorsi: il corpo di un
-    # commento, un messaggio di commit, un titolo. Analizzarli come percorsi ha
-    # prodotto tre falsi positivi il 13/09 — barre isolate in «150 ms / 1,6 Mbps»,
-    # una virgola dopo una barra, il corpo di una PR. Il livello 4 continua a
-    # scandire TUTTO il comando, quindi una fuga vera dentro un --body resta negata.
+    # Argomenti che per definizione sono TESTO: il corpo di un commento, un messaggio
+    # di commit, un titolo. Analizzarli come percorsi ha prodotto tre falsi positivi il
+    # 13/09 — barre isolate in «150 ms / 1,6 Mbps», una virgola dopo una barra, il
+    # corpo di una PR. Il livello 4 continua a scandire TUTTO il comando, quindi una
+    # fuga vera dentro un --body resta negata.
     TESTO = {"-m", "--message", "--body", "-b", "--title", "-t", "--notes", "-d",
              "--description", "--subject"}
 
-    home = os.path.realpath(os.path.expanduser("~"))
+    argomenti = []
     salta_prossimo = False
     for raw in tokens:
         if salta_prossimo:
@@ -120,6 +105,41 @@ def main():
         if raw in TESTO:
             salta_prossimo = True
             continue
+        argomenti.append(raw)
+
+    # 2 — elenco esplicito del progetto, cercato NEGLI ARGOMENTI.
+    # .cantiere-deny e' committato e vale per tutti. .cantiere-deny.local NON si
+    # committa (sta in .gitignore) e vale solo per la worktree in cui si trova: serve
+    # a un lotto che non deve leggere un'area. Il 20/09 L07 doveva scrivere i test
+    # «senza leggere site/» e due agenti su cinque l'hanno letto durante un comando
+    # operativo: un divieto scritto nel mandato e' una buona intenzione, questo e' un
+    # rifiuto.
+    #
+    # Fino al 23/09 la voce si cercava nel comando INTERO. Tre volte in L14 ha negato
+    # una voce di journal e il corpo di una PR che si limitavano a CITARE un percorso
+    # vietato: nominare non e' leggere, e un gate che confonde le due cose insegna ad
+    # aggirarlo riscrivendo le frasi. Ora si guardano gli argomenti, salvo quelli che
+    # contengono spazi — un corpo di codice, un heredoc — di cui si occupa il livello 4.
+    voci_deny = []
+    for nome in (".cantiere-deny", ".cantiere-deny.local"):
+        deny_file = os.path.join(project, nome)
+        if not os.path.isfile(deny_file):
+            continue
+        for line in open(deny_file, encoding="utf-8", errors="replace"):
+            voce = line.split("#", 1)[0].strip()
+            if voce:
+                voci_deny.append((voce, nome))
+    for raw in argomenti:
+        if re.search(r"\s", raw):
+            continue
+        basso = raw.lower()
+        for voce, nome in voci_deny:
+            if voce.lower() in basso:
+                deny(f"riferimento a '{voce}' ({nome})")
+
+    # 3 — token che sono percorsi.
+    home = os.path.realpath(os.path.expanduser("~"))
+    for raw in argomenti:
         tok = raw.split("=", 1)[1] if raw.startswith("--") and "=" in raw else raw
         tok = tok.strip("\"'`),;&|")          # punteggiatura di shell rimasta ai bordi
         if not tok or "://" in tok:
