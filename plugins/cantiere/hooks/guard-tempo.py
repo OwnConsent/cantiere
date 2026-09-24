@@ -6,9 +6,16 @@ vecchio di N minuti.
 Perche' serve accanto a guard-commit.sh, che conta i file: la soglia sui file vede
 un lotto che SCRIVE molto, non un lotto che MISURA per due ore e scrive poco. In
 L14 (23-24/09) quattro agenti su cinque sono arrivati al tetto dei turni; il loro
-lavoro l'ha committato la sessione principale, e il risultato e' che su main
-compaiono due ruoli nei trailer per cinque che hanno lavorato. Il journal dice la
-verita', la storia di git no.
+lavoro l'ha committato la sessione principale.
+
+Su main, sui 33 commit di L14, i ruoli nei trailer sono tre — orchestrator 28,
+qa-test 4, architect 1 — e 4 commit portano il trailer orchestrator con dentro il
+lavoro di un altro ruolo. Il caso peggiore non e' il nome sbagliato: @frontend e'
+assente da ENTRAMBI i registri, zero trailer e zero voci di journal, e il suo
+codice sta dentro due commit dell'orchestratore, 31 file. Due agenti fermatisi al
+tetto senza committare e senza scrivere non sono stati attribuiti male: sono
+spariti. Misura: ownconsent-www,
+journal/2026-09-24/125146-orchestrator-misura.json.
 
 Quindi il gate a tempo non protegge il lavoro dalla perdita: protegge
 l'ATTRIBUZIONE. Un trailer Cantiere-Agent e' vero solo quanto e' tempestivo il
@@ -107,8 +114,8 @@ def main():
         "Committa e pusha adesso quello che hai fatto finora, sul ramo del lotto, "
         "poi riprendi. Non e' una questione di non perdere lavoro: se il tetto dei "
         "turni arriva ora, il tuo lavoro lo committera' qualcun altro e il trailer "
-        "Cantiere-Agent portera' il suo nome. In L14 e' andata esattamente cosi' "
-        "per quattro agenti su cinque.\n")
+        "Cantiere-Agent portera' il suo nome. In L14 e' successo a 4 commit su 33, "
+        "e i due @frontend sono spariti da entrambi i registri.\n")
     sys.exit(2)
 
 
