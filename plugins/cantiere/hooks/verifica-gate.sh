@@ -200,6 +200,78 @@ journal_prova() { # etichetta, cosa fare dopo la foto, atteso(block|pass)
 journal_prova 'sola lettura, file gia sporco prima'  'true'                                   pass
 journal_prova 'lavoro nuovo senza journal'           'echo b > site/b.md'                     block
 journal_prova 'lavoro nuovo con journal'             'echo b > site/b.md; echo {} > journal/x.json' pass
+# Le worktree condividono .git: un commit sul ramo del lotto non e' raggiungibile da
+# HEAD della sessione principale. Prima del 24/09 non veniva contato e journal-check
+# taceva su un lavoro fatto e committato.
+journal_prova 'lavoro committato su un altro ramo'   'git switch -qc lotto/x; echo b > site/b.md; git add site/b.md; git commit -qm lavoro; git switch -q main' block
+
+# ---------------------------------------------------------------------------
+# Aggiunte del 24/09 — gate a tempo, ts del journal, force-with-lease,
+# livello 2 di guard-paths sugli argomenti.
+# ---------------------------------------------------------------------------
+
+write_hook() { # etichetta, percorso, contenuto, hook, atteso
+  local out rc
+  out=$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1],"content":sys.argv[2]}}))' "$2" "$3" \
+        | "$H/$4" 2>&1 >/dev/null); rc=$?
+  verdetto "$rc" "$5" "$1" "$out"
+}
+
+tempo_prova() { # etichetta, eta_commit_minuti, sporco(si|no), comando, atteso
+  local T out rc quando
+  T=$(mktemp -d)
+  quando=$(python3 -c "import time,sys; print(int(time.time())-int(sys.argv[1])*60)" "$2")
+  (
+    cd "$T" && git init -q -b main \
+      && git config user.email t@t.invalid && git config user.name T \
+      && mkdir -p site && echo a > site/a.md && git add -A \
+      && GIT_AUTHOR_DATE="@$quando +0000" GIT_COMMITTER_DATE="@$quando +0000" \
+         git commit -qm base
+    [ "$3" = si ] && echo modifica >> "$T/site/a.md"
+  ) >/dev/null 2>&1
+  out=$(cd "$T" && CLAUDE_PROJECT_DIR="$T" python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$4" \
+        | CLAUDE_PROJECT_DIR="$T" "$H/guard-tempo.py" 2>&1 >/dev/null); rc=$?
+  verdetto "$rc" "$5" "$1" "$out"
+  rm -rf "$T"
+}
+
+deny_prova() { # etichetta, comando, atteso
+  local T out rc
+  T=$(mktemp -d); mkdir -p "$T/journal"; printf 'progetto-vietato\n' > "$T/.cantiere-deny"
+  out=$(cd "$T" && CLAUDE_PROJECT_DIR="$T" python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$2" \
+        | CLAUDE_PROJECT_DIR="$T" "$H/guard-paths.py" 2>&1 >/dev/null); rc=$?
+  verdetto "$rc" "$3" "$1" "$out"
+  rm -rf "$T"
+}
+
+echo; echo "Gate a tempo sui commit — protegge l'attribuzione, non il lavoro"
+tempo_prova 'commit vecchio 90 min, lavoro sporco'   90 si 'ls site'            deny
+tempo_prova 'commit vecchio 90 min, albero pulito'   90 no 'ls site'            pass
+tempo_prova 'commit di 2 minuti, lavoro sporco'       2 si 'ls site'            pass
+tempo_prova 'la via d uscita non si blocca'          90 si 'git commit -am x'   pass
+tempo_prova 'anche git status passa'                 90 si 'git status'         pass
+
+echo; echo "ts del journal — l'orario si misura, non si ricorda"
+write_hook 'ts di adesso'            journal/2026-09-24/x.json "{\"ts\":\"$(date -Is)\",\"tipo\":\"misura\"}" journal-ts.py pass
+write_hook 'ts di tre ore prima'     journal/2026-09-24/x.json '{"ts":"2020-01-01T10:00:00+02:00"}'            journal-ts.py deny
+write_hook 'ts illeggibile'          journal/2026-09-24/x.json '{"ts":"ieri sera"}'                            journal-ts.py deny
+write_hook 'senza campo ts'          journal/2026-09-24/x.json '{"tipo":"misura"}'                             journal-ts.py pass
+write_hook 'fuori da journal/'       site/src/pages/x.astro    '{"ts":"2020-01-01T10:00:00+02:00"}'            journal-ts.py pass
+write_hook 'json non valido'         journal/2026-09-24/x.json 'non sono json'                                 journal-ts.py pass
+
+echo; echo "push forzato: --force-with-lease e' il modo corretto, non un'eccezione"
+bash_hook 'git push --force-with-lease origin lotto/l15' guard-prod.sh pass
+bash_hook 'git push --force-with-lease origin main'      guard-prod.sh deny
+bash_hook 'git push --force origin lotto/l15'            guard-prod.sh deny
+bash_hook 'git push -f origin lotto/l15'                 guard-prod.sh deny
+
+echo; echo "livello 2 di guard-paths: nominare non e' leggere (falsi positivi del 23/09)"
+deny_prova 'il percorso vietato come argomento'  'cat progetto-vietato/note.md'                       deny
+deny_prova 'citato in un messaggio di commit'    'git commit -m "la voce cita progetto-vietato"'      pass
+deny_prova 'citato nel corpo di una PR'          'gh pr comment 1 --body "vedi progetto-vietato/x"'   pass
+deny_prova 'citato dentro un heredoc'            'cat <<EOF > journal/x.json
+{"nota":"progetto-vietato resta fuori"}
+EOF'                                                                                                  pass
 
 echo
 if [ "$KO" -eq 0 ]; then

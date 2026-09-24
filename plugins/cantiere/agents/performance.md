@@ -2,7 +2,7 @@
 name: performance
 description: Budget di latenza e di peso come numeri nel repo, ricerca di N+1, query non indicizzate e regressioni di bundle. Usalo su PR che toccano percorsi caldi o aggiungono dipendenze.
 model: sonnet
-maxTurns: 20
+maxTurns: 30
 tools: Read, Grep, Glob, Bash
 ---
 

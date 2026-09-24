@@ -2,7 +2,7 @@
 name: code-reviewer
 description: Revisione avversariale di un diff con contesto pulito. Usalo su ogni PR, sempre a valle di chi ha scritto il codice e mai sullo stesso agente che lo ha prodotto.
 model: opus
-maxTurns: 20
+maxTurns: 30
 tools: Read, Grep, Glob, Bash
 ---
 

@@ -63,9 +63,20 @@ def esame(sid):
     ora = sporchi()
     cambiati = {f for f, h in ora.items() if s["sporchi"].get(f) != h}
     cambiati |= {f for f in s["sporchi"] if f not in ora}   # tornati puliti o committati
-    # file toccati dai commit fatti DURANTE la sessione (tempo di commit >= avvio)
-    if s.get("head"):
-        log = git("log", "--format=@%ct", "--name-only", f'{s["head"]}..HEAD')
+    # File toccati dai commit fatti DURANTE la sessione, su QUALUNQUE ramo locale.
+    # Prima si guardava solo head..HEAD: le worktree condividono la cartella .git e
+    # i ref, quindi un agente che committa sul ramo del suo lotto mentre la sessione
+    # principale sta su un altro ramo non veniva contato, e journal-check sollecitava
+    # una voce per un lavoro che risultava inesistente. --branches resta ai rami
+    # locali: --all includerebbe i ref remoti, cioe' il lavoro di altri.
+    if s.get("inizio"):
+        # --not <head> esclude tutto cio' che era gia' raggiungibile dal commit di
+        # partenza: senza, il commit fatto un istante PRIMA dell'avvio rientra nella
+        # finestra di --since e la sessione risulta avere lavorato. La suite l'ha
+        # colto subito, sul caso «sola lettura, file gia sporco prima».
+        esclusioni = ["--not", s["head"]] if s.get("head") else []
+        log = git("log", "--branches", *esclusioni, "--format=@%ct", "--name-only",
+                  f'--since=@{int(s["inizio"]) - 5}')
         dentro = False
         for riga in log.splitlines():
             if riga.startswith("@"):

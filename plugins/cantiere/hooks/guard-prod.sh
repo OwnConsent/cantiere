@@ -17,7 +17,12 @@ shopt -s nocasematch
 case "$CMD" in
   *"gh pr merge"*)       deny "merge di PR" ;;
   *"gh release create"*) deny "creazione di release" ;;
-  *"git push --force"*|*"git push -f "*) deny "push forzato" ;;
+  # --force-with-lease rifiuta di sovrascrivere quello che non hai visto: e' il modo
+  # corretto di riscrivere un ramo di lotto dopo un rebase, e negarlo costringeva a
+  # cancellare e ricreare il ramo, perdendo la PR. Su main resta negato dal controllo
+  # per segmento qui sotto, che guarda il ramo di destinazione.
+  *"--force-with-lease"*) : ;;
+  *"git push --force"*|*"git push -f "*) deny "push forzato senza --force-with-lease" ;;
 esac
 shopt -u nocasematch
 
