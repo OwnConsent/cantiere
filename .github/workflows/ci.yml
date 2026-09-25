@@ -1,5 +1,11 @@
 name: CI
 
+# Visto rosso il 25/09/2026: togliendo il bit di esecuzione a guard-tempo.py il passo
+# «Bit di esecuzione» ha fallito con «non eseguibile: plugins/cantiere/hooks/guard-tempo.py»
+# e la PR e' passata a BLOCKED.
+#   https://github.com/OwnConsent/cantiere/actions/runs/36118902061
+# Un gate mai visto rosso e' una decorazione.
+
 on:
   pull_request:
   push:
