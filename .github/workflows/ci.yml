@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sintassi
+        run: |
+          python3 -m py_compile plugins/cantiere/hooks/*.py
+          for f in plugins/cantiere/hooks/*.sh template/githooks/*; do
+            [ -f "$f" ] && bash -n "$f"
+          done
+
+      - name: Bit di esecuzione
+        run: |
+          # Un hook senza bit x non fallisce: TACE. E un gate che tace e' peggio
+          # di un gate assente, perche' nessuno se ne accorge.
+          mancanti=0
+          for f in plugins/cantiere/hooks/*.py plugins/cantiere/hooks/*.sh; do
+            if [ ! -x "$f" ]; then echo "non eseguibile: $f"; mancanti=1; fi
+          done
+          exit $mancanti
+
+      - name: hooks.json punta a file che esistono
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          conf = json.load(open("plugins/cantiere/hooks/hooks.json"))
+          mancanti = []
+          for evento, gruppi in conf["hooks"].items():
+              for gruppo in gruppi:
+                  for h in gruppo.get("hooks", []):
+                      p = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", "plugins/cantiere")
+                      if not os.path.isfile(p):
+                          mancanti.append(f"{evento}: {p}")
+          if mancanti:
+              print("hook registrati ma inesistenti:", *mancanti, sep="\n  ")
+              sys.exit(1)
+          print("tutti gli hook registrati esistono")
+          PY
+
+      - name: verifica-gate
+        run: |
+          # La suite va eseguita DA un progetto, non dal repo del plugin, e quel
+          # progetto non puo' stare sotto un prefisso di sistema: sotto /tmp il
+          # perimetro non esiste e meta' delle verifiche passerebbe per il motivo
+          # sbagliato. $RUNNER_TEMP sta sotto /home/runner, quindi va bene.
+          P="$RUNNER_TEMP/progetto-prova"
+          mkdir -p "$P" && cd "$P"
+          git init -q -b main
+          git config user.email ci@cantiere.invalid
+          git config user.name ci
+          # senza .cantiere-deny il livello 2 non viene verificato affatto: la suite
+          # lo dichiara e va avanti. In CI lo vogliamo verificato.
+          printf 'OwnConsent/cmp\n' > .cantiere-deny
+          echo segnaposto > CLAUDE.md
+          git add -A && git commit -qm base
+          CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
