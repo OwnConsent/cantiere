@@ -68,3 +68,13 @@ jobs:
           echo segnaposto > CLAUDE.md
           git add -A && git commit -qm base
           CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
+
+      - name: Nessun bytecode committato
+        run: |
+          # Il 24/09 un .pyc di guard-tempo e' finito in un commit: gli hook girano
+          # come script, ma py_compile lascia __pycache__ e il repo non lo ignorava.
+          trovati=$(git ls-files | grep -E '(^|/)__pycache__/|\.pyc$' || true)
+          if [ -n "$trovati" ]; then
+            echo "bytecode tracciato nel repo:"; echo "$trovati"; exit 1
+          fi
+          echo "nessun bytecode tracciato"
