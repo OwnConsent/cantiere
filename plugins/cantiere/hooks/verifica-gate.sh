@@ -135,17 +135,25 @@ echo; echo "Firma dei commit — su repo usa e getta, mai su questo"
 # Dal 21/09 il ruolo arriva nella variabile CANTIERE_AGENT, che agent-env.py
 # antepone ai comandi git. Si verifica la catena intera: payload di PreToolUse ->
 # comando riscritto -> git hook -> trailer riconosciuto da git.
+trova_githook() { # dal repo di cantiere, o dal progetto che ha copiato il template
+  local f
+  for f in "$H/../../../template/githooks/prepare-commit-msg" "$PWD/githooks/prepare-commit-msg"; do
+    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
 firma_prova() { # etichetta, agent_type (vuoto = filo principale, "-" = nessuna sessione), atteso
   local T R val cmd
   T=$(mktemp -d); R="$T/repo"; mkdir -p "$R"
   git -C "$R" init -q -b main >/dev/null 2>&1
   git -C "$R" config user.email prova@cantiere.invalid; git -C "$R" config user.name prova
   mkdir -p "$R/githooks"
-  cp "$H/../../../template/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
-    || cp "$PWD/githooks/prepare-commit-msg" "$R/githooks/" 2>/dev/null \
+  cp "$(trova_githook)" "$R/githooks/" 2>/dev/null \
     || { printf "  ${X}KO${N}    %-52s prepare-commit-msg non trovato\n" "$1"; KO=$((KO+1)); rm -rf "$T"; return; }
+  cp "$(dirname "$(trova_githook)")/ruoli" "$R/githooks/" 2>/dev/null
   chmod +x "$R/githooks/prepare-commit-msg"; git -C "$R" config core.hooksPath githooks
-  echo a > "$R/a"; git -C "$R" add -A; git -C "$R" commit -qm base >/dev/null 2>&1
+  echo a > "$R/a"; git -C "$R" add -A
+  env -u CLAUDECODE -u CANTIERE_AGENT git -C "$R" commit -qm base >/dev/null 2>&1
   git -C "$R" worktree add -q "$T/wt" -b lotto >/dev/null 2>&1
   cmd="cd '$T/wt' && echo b > b && git add -A && git commit -qm 'feat: x'"
   if [ "$2" != "-" ]; then
@@ -154,7 +162,10 @@ firma_prova() { # etichetta, agent_type (vuoto = filo principale, "-" = nessuna 
           | python3 "$H/agent-env.py" \
           | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])')
   fi
-  env -u CANTIERE_AGENT bash -c "$cmd" >/dev/null 2>&1
+  # CLAUDECODE lo imposta Claude Code nei processi che lancia: qui lo si mette o lo
+  # si toglie a mano, perche' la suite gira sia da una sessione sia in CI.
+  if [ "$2" != "-" ]; then env -u CANTIERE_AGENT CLAUDECODE=1 bash -c "$cmd" >/dev/null 2>&1
+  else env -u CANTIERE_AGENT -u CLAUDECODE bash -c "$cmd" >/dev/null 2>&1; fi
   val=$(git -C "$T/wt" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n')
   [ -n "$val" ] || val="niente"
   if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
@@ -272,6 +283,183 @@ deny_prova 'citato nel corpo di una PR'          'gh pr comment 1 --body "vedi p
 deny_prova 'citato dentro un heredoc'            'cat <<EOF > journal/x.json
 {"nota":"progetto-vietato resta fuori"}
 EOF'                                                                                                  pass
+
+# ---------------------------------------------------------------------------
+# Aggiunte del 01/10 — firma dal payload (primo strato), diniego nel git hook
+# (secondo strato), avviso di main indietro.
+# ---------------------------------------------------------------------------
+
+agente_prova() { # etichetta, agent_type ('' = filo principale), comando, atteso: deny | niente | <ruolo>
+  local uscita rc esito
+  uscita=$(python3 -c 'import json,sys
+d={"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}
+if sys.argv[1]: d["agent_type"]=sys.argv[1]
+print(json.dumps(d))' "$2" "$3" | "$H/agent-env.py" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 2 ]; then esito=deny
+  elif [ -z "$uscita" ]; then esito=niente
+  else esito=$(printf '%s' "$uscita" | python3 -c 'import sys,json,re
+c=json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"]
+m=re.match(r"export CANTIERE_AGENT=(\S+); ",c); print(m.group(1) if m else "malformato")')
+  fi
+  if [ "$esito" = "$4" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$4" "$esito"; KO=$((KO+1)); fi
+}
+
+echo; echo "Primo strato — agent-env.py: il ruolo viene dal payload, su ogni forma di comando git"
+agente_prova 'filo principale: git commit -m'          ''                 'git commit -m "x"'                    orchestrator
+agente_prova 'subagente di cantiere: git commit -m'    'cantiere:qa-test' 'git commit -m "x"'                    qa-test
+agente_prova 'git -C <dir> commit'                     'cantiere:devops'  'git -C /percorso commit -m x'         devops
+agente_prova 'cd <dir> && git commit'                  ''                 'cd dir && git commit -m x'            orchestrator
+agente_prova 'git commit -F - con heredoc'             ''                 "git commit -F - <<'EOF'
+titolo
+EOF"                                                                                                              orchestrator
+agente_prova 'bash -c "git commit"'                    ''                 'bash -c "git commit -m x"'            orchestrator
+agente_prova 'git merge --no-ff'                       'cantiere:qa-test' 'git merge --no-ff origin/x'           qa-test
+agente_prova 'ruolo esplicito uguale al payload'       ''                 'CANTIERE_AGENT=orchestrator git commit -m x' orchestrator
+agente_prova 'script che non nomina git (limite noto)' ''                 './scripts/x.sh'                       niente
+agente_prova 'il messaggio cita la variabile'          ''                 'git commit -m "fix: CANTIERE_AGENT= vuota"' orchestrator
+agente_prova 'heredoc che cita la variabile'           ''                 "git commit -F - <<'EOF'
+prima era CANTIERE_AGENT=qa-test a mano
+EOF"                                                                                                              orchestrator
+
+echo; echo "Primo strato — la firma non si dichiara a mano"
+agente_prova 'ruolo forzato a un altro valore'         'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git commit -m x' deny
+agente_prova 'export di un altro ruolo, poi commit'    ''                 'export CANTIERE_AGENT=qa-test && git commit -m x' deny
+agente_prova 'variabile svuotata'                      ''                 'CANTIERE_AGENT= git commit -m x'      deny
+agente_prova 'variabile svuotata con le virgolette'    ''                 'CANTIERE_AGENT="" git commit -m x'    deny
+agente_prova 'variabile tolta con env -u'              ''                 'env -u CANTIERE_AGENT git commit -m x' deny
+agente_prova 'variabile tolta con unset'               ''                 'unset CANTIERE_AGENT; git commit -m x' deny
+agente_prova 'forzata dentro bash -c'                  ''                 'bash -c "CANTIERE_AGENT=qa-test git commit -m x"' deny
+agente_prova 'forzata su un merge'                     ''                 'CANTIERE_AGENT=devops git merge --no-ff x' deny
+
+echo; echo "Primo strato — chi non e' un ruolo di cantiere non committa"
+agente_prova 'Explore: git commit'                     'Explore'          'git commit -m x'                      deny
+agente_prova 'general-purpose: git -C <dir> commit'    'general-purpose'  'git -C /p commit -m x'                deny
+agente_prova 'general-purpose: git merge'              'general-purpose'  'git merge --no-ff x'                  deny
+agente_prova 'tipo di un altro plugin: commit'         'altro:revisore'   'cd d && git commit -m x'              deny
+agente_prova 'nome non valido (sconosciuto): commit'   'due parole'       'git commit -m x'                      deny
+agente_prova 'Explore: git log resta permesso'         'Explore'          'git log --oneline -5'                 Explore
+agente_prova 'Explore: git log --grep commit'          'Explore'          'git log --grep "commit"'              Explore
+
+echo; echo "Secondo strato — il git hook da solo, senza agent-env.py (repo usa e getta)"
+# Git chiamato direttamente, quindi il primo strato non c'e': e' il caso di una
+# sessione partita senza il plugin, misurato su ownconsent-www dal 26/09.
+hook_prova() { # CLAUDECODE(si|no), valore di CANTIERE_AGENT ('' = vuota), operazione, atteso: negato | niente | <ruolo>
+  local T R rc val prima etichetta
+  local -a amb op
+  etichetta="CLAUDECODE=$1 ruolo=[${2}] $3"
+  trova_githook >/dev/null || { printf "  ${X}KO${N}    %-52s prepare-commit-msg non trovato\n" "$etichetta"; KO=$((KO+1)); return; }
+  T=$(mktemp -d); R="$T/repo"
+  (
+    export -n CLAUDECODE CANTIERE_AGENT 2>/dev/null; unset CLAUDECODE CANTIERE_AGENT
+    git init -q -b main "$R" && cd "$R" && git config user.email prova@cantiere.invalid && git config user.name prova \
+      && echo a > a && git add -A && git commit -qm base \
+      && git switch -qc lato && echo l > l && git add -A && git commit -qm lato \
+      && git switch -q main && echo d > d && git add -A && git commit -qm d \
+      && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+      && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks
+  ) >/dev/null 2>&1
+  prima=$(git -C "$R" rev-parse HEAD)
+  amb=(env -u CLAUDECODE -u CANTIERE_AGENT)
+  [ "$1" = si ] && amb+=(CLAUDECODE=1)
+  [ -n "$2" ] && amb+=(CANTIERE_AGENT="$2")
+  case "$3" in
+    commit)      echo n > "$R/n"; git -C "$R" add -A; op=(commit -qm 'feat: x') ;;
+    commit-nv)   echo n > "$R/n"; git -C "$R" add -A; op=(commit -qm 'feat: x' --no-verify) ;;
+    merge)       op=(merge -q --no-ff --no-edit lato) ;;
+    merge-nv)    op=(merge -q --no-ff --no-edit --no-verify lato) ;;
+    amend)       op=(commit -q --amend --no-edit) ;;
+  esac
+  "${amb[@]}" git -C "$R" "${op[@]}" >/dev/null 2>&1; rc=$?
+  if [ "$rc" -ne 0 ] && [ "$(git -C "$R" rev-parse HEAD)" = "$prima" ]; then val=negato
+  else
+    val=$(git -C "$R" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n')
+    [ -n "$val" ] || val=niente
+  fi
+  if [ "$val" = "$4" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$etichetta" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$etichetta" "$4" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+if command -v git >/dev/null 2>&1; then
+  for o in commit commit-nv merge merge-nv amend; do
+    hook_prova si ''       "$o" negato
+    hook_prova si qa-test  "$o" qa-test
+    hook_prova si Explore  "$o" negato
+  done
+  # fuori da Claude Code niente cambia: nessun diniego, i merge non si firmano, e
+  # una persona che imposta la variabile ottiene il trailer che ha chiesto
+  for o in commit commit-nv amend; do
+    hook_prova no ''       "$o" niente
+    hook_prova no qa-test  "$o" qa-test
+    hook_prova no Explore  "$o" Explore
+  done
+  for o in merge merge-nv; do
+    hook_prova no ''       "$o" niente
+    hook_prova no qa-test  "$o" niente
+    hook_prova no Explore  "$o" niente
+  done
+else
+  printf "  ${X}KO${N}    %-52s git non installato\n" "git hook"; KO=$((KO+1))
+fi
+
+echo; echo "Avviso di main indietro — SessionStart, senza modificare niente"
+# "Non modifica niente": stesso commit su main, stesso ramo, nessun file tracciato
+# toccato. La foto di journal-stato scrive in .work/, che e' scratch e c'era gia'.
+fermo() { printf '%s %s %s' "$(git -C "$1" rev-parse main)" "$(git -C "$1" symbolic-ref --short HEAD)" \
+          "$(git -C "$1" status --porcelain --untracked-files=no | wc -l | tr -d ' ')"; }
+sessione_prova() { # etichetta, scenario, atteso: avviso-indietro | avviso-fallito | avviso-scaduto | silenzio
+  local T out esito prima dopo dove
+  T=$(mktemp -d)
+  (
+    export -n CLAUDECODE CANTIERE_AGENT 2>/dev/null; unset CLAUDECODE CANTIERE_AGENT
+    git init -q --bare -b main "$T/origin.git"
+    git clone -q "$T/origin.git" "$T/altro" 2>/dev/null && cd "$T/altro" \
+      && git config user.email t@t.invalid && git config user.name T \
+      && git switch -qc main 2>/dev/null; echo a > a && git add -A && git commit -qm base && git push -q origin main
+    git clone -q "$T/origin.git" "$T/principale" && cd "$T/principale" \
+      && git config user.email t@t.invalid && git config user.name T
+    case "$2" in
+      allineato) : ;;
+      *) cd "$T/altro" && echo b > b && git add -A && git commit -qm due && echo c > c && git add -A \
+           && git commit -qm tre && git push -q origin main ;;
+    esac
+    cd "$T/principale"
+    case "$2" in
+      fetch-fallito)  git remote set-url origin "$T/non-esiste.git" ;;
+      fetch-scaduto)  printf '#!/bin/sh\nsleep 20\n' > "$T/ssh-lento"; chmod +x "$T/ssh-lento"
+                      git remote set-url origin 'ssh://git@cantiere.invalid/x.git' ;;
+      # main (indietro) sta in una worktree collegata; il principale e' su un altro ramo
+      worktree)       git switch -qc altro && git worktree add -q "$T/wt" main ;;
+      altro-ramo)     git switch -qc lotto/x ;;
+    esac
+  ) >/dev/null 2>&1
+  dove="$T/principale"; [ "$2" = worktree ] && dove="$T/wt"
+  prima=$(fermo "$T/principale")
+  if [ "$2" = fetch-scaduto ]; then
+    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
+  else
+    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
+  fi
+  dopo=$(fermo "$T/principale")
+  case "$out" in
+    *"indietro di 2 commit rispetto a origin/main"*"git pull --ff-only"*) esito=avviso-indietro ;;
+    *"il fetch di origin/main e' scaduto dopo 1 s"*"git pull --ff-only"*) esito=avviso-scaduto ;;
+    *"il fetch di origin/main e' fallito"*"git pull --ff-only"*)          esito=avviso-fallito ;;
+    *ATTENZIONE*)                                                         esito=avviso-diverso ;;
+    *"Cantiere attivo."*)                                                 esito=silenzio ;;
+    *)                                                                    esito=nessuna-uscita ;;
+  esac
+  [ "$prima" = "$dopo" ] || esito="$esito+MODIFICATO"
+  if [ "$esito" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+sessione_prova 'main indietro di 2 commit'               indietro       avviso-indietro
+sessione_prova 'main allineato'                          allineato      silenzio
+sessione_prova 'fetch fallito: lo dice'                  fetch-fallito  avviso-fallito
+sessione_prova 'fetch scaduto al limite: lo dice'       fetch-scaduto  avviso-scaduto
+sessione_prova 'main indietro, ma in una worktree collegata' worktree     silenzio
+sessione_prova 'checkout principale su un altro ramo'    altro-ramo     silenzio
 
 echo
 if [ "$KO" -eq 0 ]; then
