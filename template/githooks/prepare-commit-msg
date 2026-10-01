@@ -9,9 +9,29 @@
 # «orchestrator» per il filo principale. Viaggia con il processo, quindi funziona in
 # qualunque worktree e non si mescola fra sessioni parallele.
 #
-# Variabile assente = il commit non viene da Claude Code = e' di una persona, e non
-# si firma. Attribuire a un agente il lavoro di un umano falsa il registro tanto
-# quanto il contrario.
+# Due casi, distinti da CLAUDECODE=1, che Claude Code imposta in ogni processo che
+# lancia (documentato in code.claude.com/docs/en/env-vars) e che questo hook eredita:
+#
+# - Fuori da Claude Code il commit e' di una persona: variabile assente = non si
+#   firma. Attribuire a un agente il lavoro di un umano falsa il registro tanto
+#   quanto il contrario.
+# - Dentro Claude Code un commit senza ruolo, o con un ruolo che non sta in
+#   githooks/ruoli, viene NEGATO. Vale anche per i merge.
+#
+# 01/10 — perche' il diniego. Fino a oggi una variabile vuota valeva sempre «persona»
+# e l'hook usciva con 0. Misurato su ownconsent-www: dal 26/09 le sessioni sono
+# partite senza il plugin (nei transcript nessuna traccia dei suoi hook, mentre fino
+# al 25/09 ci sono in ogni sessione), quindi niente anteponeva la variabile e la
+# firma dipendeva dall'agente che la scriveva a mano. Su 18 comandi di commit di
+# una sessione, l'unico senza la variabile e' uscito senza firma (cb63f2c, 29/09),
+# e il merge a1b665d (30/09) e' uscito senza firma per l'uscita anticipata sui merge.
+# Questo hook e' il secondo strato e deve reggere da solo: prepare-commit-msg gira
+# anche con --no-verify e sui merge (provato con git 2.43; githooks(5) nomina
+# --no-verify solo per pre-commit, pre-merge-commit e commit-msg).
+#
+# Limiti: CLAUDECODE lo dichiara Claude Code, e un comando puo' toglierlo; senza
+# plugin un agente puo' ancora dichiararsi da solo un ruolo valido, e da qui non si
+# distingue. Un merge fast-forward non crea commit e non passa di qui.
 #
 # Storia: fino al 20/09 il ruolo stava in un file-marcatore condiviso. Si
 # sovrascriveva fra sessioni parallele e ogni SubagentStop annidato lo riazzerava:
@@ -21,13 +41,26 @@
 set -uo pipefail
 MSG_FILE="$1"
 SORGENTE="${2:-}"
-
-case "$SORGENTE" in merge|squash) exit 0 ;; esac
-
 AGENTE="${CANTIERE_AGENT:-}"
-[ -z "$AGENTE" ] && exit 0
-# difesa: solo un nome di ruolo, mai altro testo dentro il messaggio
-[[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
+RUOLI="$(cd "$(dirname "$0")" && pwd)/ruoli"
+
+nega() {
+  printf 'COMMIT NEGATO: %s\n' "$1" >&2
+  printf 'La firma la mette il plugin cantiere (hook agent-env.py), ricavando il ruolo dalla sessione: non si scrive a mano. Se manca, il plugin non e'"'"' attivo in questa sessione o il ruolo non e'"'"' ricavabile. Fermati e riportalo ad Andrea.\n' >&2
+  exit 1
+}
+
+if [ "${CLAUDECODE:-}" = "1" ]; then
+  [ -n "$AGENTE" ] || nega "sessione Claude Code senza CANTIERE_AGENT: il commit uscirebbe senza firma."
+  [ -r "$RUOLI" ] || nega "manca l'elenco dei ruoli ($RUOLI): non posso verificare «$AGENTE»."
+  grep -v '^[[:space:]]*#' "$RUOLI" | grep -qxF -- "$AGENTE" \
+    || nega "«$AGENTE» non e' un ruolo di cantiere (elenco: githooks/ruoli)."
+else
+  case "$SORGENTE" in merge|squash) exit 0 ;; esac
+  [ -z "$AGENTE" ] && exit 0
+  # difesa: solo un nome di ruolo, mai altro testo dentro il messaggio
+  [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
+fi
 
 # se la firma c'e' gia' (rebase, amend), non duplicarla
 grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0

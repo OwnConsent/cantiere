@@ -1,0 +1,29 @@
+# Ruoli che possono firmare un commit: uno per riga, il nome del file in
+# plugins/cantiere/agents/ senza .md. Lo legge githooks/prepare-commit-msg.
+# E' una COPIA: il git hook vive nel repository di progetto e non ha un percorso
+# verso il plugin. La CI di cantiere la confronta con agents/*.md e va rossa se
+# divergono (01/10).
+accessibility
+architect
+backend
+case-study
+code-reviewer
+comms-release
+data-analytics
+database
+design
+devops
+docs-writer
+finops
+frontend
+incident-responder
+infrastructure
+maintenance
+orchestrator
+performance
+privacy
+product-spec
+qa-test
+security
+seo
+sre-observability
