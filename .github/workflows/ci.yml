@@ -4,6 +4,11 @@ name: CI
 # «Bit di esecuzione» ha fallito con «non eseguibile: plugins/cantiere/hooks/guard-tempo.py»
 # e la PR e' passata a BLOCKED.
 #   https://github.com/OwnConsent/cantiere/actions/runs/36118902061
+#
+# Visto rosso il 01/10/2026: tolto qa-test da template/githooks/ruoli, il passo
+# «L'elenco dei ruoli del git hook coincide con agents/» ha fallito con
+# «in agents/ ma non in template/githooks/ruoli: qa-test».
+#   https://github.com/OwnConsent/cantiere/actions/runs/36882500211
 # Un gate mai visto rosso e' una decorazione.
 
 on:
