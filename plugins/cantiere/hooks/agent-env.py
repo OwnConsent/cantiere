@@ -67,15 +67,15 @@ def senza_prosa(cmd):
 def manomissione(cmd, ruolo):
     """Restituisce il motivo se il comando svuota, toglie o forza la variabile."""
     testo = senza_prosa(cmd)
-    if re.search(r"\bunset\s+(?:-\w+\s+)*" + VAR + r"\b", testo) or \
-       re.search(r"(?:-u\s*|--unset[=\s]\s*)" + VAR + r"\b", testo):
-        return f"il comando toglie {VAR}"
+    if re.search(r"\bunset\s+(?:-\w+\s+)*" + VAR + r"\b", testo):
+        return f"il comando toglie {VAR} con unset"
+    if re.search(r"(?:-u\s*|--unset[=\s]\s*)" + VAR + r"\b", testo):
+        return f"il comando toglie {VAR} con env -u"
     for m in re.finditer(r"(?<![\w$])" + VAR + r"=(\"[^\"]*\"|'[^']*'|[^\s;&|)]*)", testo):
         valore = m.group(1).strip("\"'")
-        if valore == "":
-            return f"il comando svuota {VAR}"
         if valore != ruolo:
-            return f"il comando forza {VAR}=«{valore}», ma questa chiamata viene da «{ruolo}»"
+            cosa = f"forza {VAR}=«{valore}»" if valore else f"svuota {VAR}"
+            return f"il comando {cosa}, ma questa chiamata viene da «{ruolo}»"
     return None
 
 def nega(motivo):
