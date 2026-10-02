@@ -4,6 +4,11 @@ name: CI
 # «Bit di esecuzione» ha fallito con «non eseguibile: plugins/cantiere/hooks/guard-tempo.py»
 # e la PR e' passata a BLOCKED.
 #   https://github.com/OwnConsent/cantiere/actions/runs/36118902061
+#
+# Visto rosso il 01/10/2026: tolto qa-test da template/githooks/ruoli, il passo
+# «L'elenco dei ruoli del git hook coincide con agents/» ha fallito con
+# «in agents/ ma non in template/githooks/ruoli: qa-test».
+#   https://github.com/OwnConsent/cantiere/actions/runs/36882500211
 # Un gate mai visto rosso e' una decorazione.
 
 on:
@@ -55,6 +60,27 @@ jobs:
               print("hook registrati ma inesistenti:", *mancanti, sep="\n  ")
               sys.exit(1)
           print("tutti gli hook registrati esistono")
+          PY
+
+      - name: L'elenco dei ruoli del git hook coincide con agents/
+        run: |
+          # template/githooks/ruoli e' una copia: il git hook vive nel repository di
+          # progetto e non vede il plugin. Se un ruolo nasce o sparisce in agents/ e
+          # la copia resta indietro, il git hook nega i commit di un ruolo vero, o ne
+          # accetta uno che non esiste piu'.
+          python3 - <<'PY'
+          import os, sys
+          agenti = {f[:-3] for f in os.listdir("plugins/cantiere/agents") if f.endswith(".md")}
+          righe = [r.strip() for r in open("template/githooks/ruoli")]
+          ruoli = [r for r in righe if r and not r.startswith("#")]
+          doppi = sorted({r for r in ruoli if ruoli.count(r) > 1})
+          solo_agenti, solo_ruoli = sorted(agenti - set(ruoli)), sorted(set(ruoli) - agenti)
+          if solo_agenti or solo_ruoli or doppi:
+              if solo_agenti: print("in agents/ ma non in template/githooks/ruoli:", *solo_agenti)
+              if solo_ruoli:  print("in template/githooks/ruoli ma non in agents/:", *solo_ruoli)
+              if doppi:       print("ripetuti in template/githooks/ruoli:", *doppi)
+              sys.exit(1)
+          print(f"{len(ruoli)} ruoli, gli stessi di agents/")
           PY
 
       - name: verifica-gate
