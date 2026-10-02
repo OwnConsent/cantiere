@@ -42,6 +42,19 @@ riga che lo apre no (li' un ruolo forzato passava); il prefisso di un altro
 plugin non vale come ruolo di cantiere; la manomissione si cerca solo nei comandi
 che creano un commit, non in ogni comando che nomina git.
 
+02/10 — solo `cantiere:<ruolo>` (decisione di Andrea). Un agent_type senza
+prefisso e' negato come un agente fuori elenco, anche se il nome e' quello di un
+ruolo: un agente locale del progetto chiamato `frontend` non deve firmare da
+frontend. Misura: nei transcript di ownconsent-www fino al 25/09, con il plugin
+caricato, 67 chiamate su 67 ai subagenti di cantiere portano `cantiere:<ruolo>`.
+La documentazione non lo garantisce: «You can use just the agent name if no
+plugin provides it, but must use the scoped form when ambiguous»
+(code.claude.com/docs/en/sub-agents), e agent_type e' «custom agent name, or
+plugin-scoped name like "my-plugin:reviewer"» (code.claude.com/docs/en/hooks).
+Per questo il diniego riporta l'agent_type ricevuto: se una versione futura di
+Claude Code cambia formato, si vede subito. Il filo principale, senza
+agent_type, resta orchestrator.
+
 Limiti, coperti dal secondo strato (il git hook nega un commit senza ruolo
 valido): uno script che lancia git senza nominarlo nel comando non viene
 riscritto; un'assegnazione nascosta in un heredoc dato in pasto a una shell non
@@ -102,10 +115,17 @@ def main():
     if not isinstance(cmd, str) or not re.search(r"\bgit\b", cmd):
         sys.exit(0)
     tipo = (d.get("agent_type") or "").strip()
-    # `cantiere:qa-test` e' un ruolo di cantiere, `altro:qa-test` no: il prefisso di
-    # un altro plugin non si butta via. Un nome senza prefisso resta ammesso.
+    # Solo `cantiere:<ruolo>` e' un ruolo di cantiere: ne' `altro:qa-test` ne' un
+    # `qa-test` senza prefisso. A chi non lo e' non si inietta mai un nome che sta
+    # nell'elenco: il secondo strato lo accetterebbe.
     spazio, _, nome = tipo.rpartition(":")
-    ruolo = (nome if spazio in ("", "cantiere") else "sconosciuto") if tipo else "orchestrator"
+    if not tipo:
+        ruolo = "orchestrator"
+    elif spazio == "cantiere":
+        ruolo = nome
+    else:
+        ruolo = "sconosciuto" if (spazio or nome in ruoli_validi()) else nome
+    di_cantiere = not tipo or spazio == "cantiere"
     # solo caratteri sicuri in un nome di ruolo: nessuna iniezione nella shell
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
@@ -116,10 +136,11 @@ def main():
     motivo = manomissione(cmd, ruolo) if crea else None
     if motivo:
         nega(motivo)
-    if ruolo not in ruoli_validi() and crea:
-        print(f"FIRMA: commit negato. L'agente «{tipo or ruolo}» non e' un ruolo di "
-              f"cantiere e non puo' firmare un commit o un merge. Riporta il lavoro "
-              f"a chi ti ha lanciato: committa un ruolo di cantiere.", file=sys.stderr)
+    if crea and not (di_cantiere and ruolo in ruoli_validi()):
+        print(f"FIRMA: commit negato. agent_type ricevuto: «{tipo}». Firma un commit o "
+              f"un merge solo un ruolo di cantiere, nella forma cantiere:<ruolo>. Riporta "
+              f"il lavoro a chi ti ha lanciato: committa un ruolo di cantiere.",
+              file=sys.stderr)
         sys.exit(2)
 
     nuovo = dict(ti)

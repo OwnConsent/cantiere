@@ -347,6 +347,15 @@ agente_prova 'general-purpose: git -C <dir> commit'    'general-purpose'  'git -
 agente_prova 'general-purpose: git merge'              'general-purpose'  'git merge --no-ff x'                  deny
 agente_prova 'tipo di un altro plugin: commit'         'altro:revisore'   'cd d && git commit -m x'              deny
 agente_prova 'nome non valido (sconosciuto): commit'   'due parole'       'git commit -m x'                      deny
+agente_prova 'ruolo vero ma senza prefisso: commit'     'qa-test'          'git commit -m x'                      deny
+agente_prova 'ruolo vero senza prefisso: merge'        'frontend'         'git merge --no-ff x'                  deny
+agente_prova 'senza prefisso: git log, mai un ruolo vero' 'qa-test'       'git log --oneline -5'                 sconosciuto
+agente_prova 'con il prefisso: ammesso'                'cantiere:frontend' 'git commit -m x'                     frontend
+out=$(printf '{"agent_type":"qa-test","tool_input":{"command":"git commit -m x"}}' | "$H/agent-env.py" 2>&1 >/dev/null)
+case "$out" in
+  *"agent_type ricevuto: «qa-test»"*"cantiere:<ruolo>"*) printf "  ${V}ok${N}    %-52s %s\n" "il diniego riporta l'agent_type ricevuto" "testo presente"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s %s\n" "il diniego riporta l'agent_type ricevuto" "testo assente"; KO=$((KO+1)) ;;
+esac
 agente_prova 'Explore: git log resta permesso'         'Explore'          'git log --oneline -5'                 Explore
 agente_prova 'Explore: git log --grep commit'          'Explore'          'git log --grep "commit"'              Explore
 
