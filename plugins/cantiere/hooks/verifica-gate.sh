@@ -460,6 +460,7 @@ hook_prova() { # CLAUDECODE(si|no), valore di CANTIERE_AGENT ('' = vuota), opera
     merge-nv)    op=(merge -q --no-ff --no-edit --no-verify lato) ;;
     amend)       op=(commit -q --amend --no-edit) ;;
     firma-a-mano) echo n > "$R/n"; git -C "$R" add -A; op=(commit -qm 'feat: x' -m 'Cantiere-Agent: orchestrator') ;;
+    finto-rebase) mkdir "$(git -C "$R" rev-parse --absolute-git-dir)/rebase-merge"; echo n > "$R/n"; git -C "$R" add -A; op=(commit -qm 'feat: x') ;;
   esac
   "${amb[@]}" git -C "$R" "${op[@]}" >/dev/null 2>&1; rc=$?
   if [ "$rc" -ne 0 ] && [ "$(git -C "$R" rev-parse HEAD)" = "$prima" ]; then val=negato
@@ -481,6 +482,11 @@ if command -v git >/dev/null 2>&1; then
   hook_prova si qa-test      firma-a-mano qa-test
   hook_prova si orchestrator firma-a-mano orchestrator
   hook_prova no ''           firma-a-mano orchestrator
+  # collaudo di ownconsent-www #77: una cartella di rebase fatta con mkdir non apre
+  # la porta a un commit senza ruolo. Fuori da Claude Code niente cambia.
+  hook_prova si ''           finto-rebase negato
+  hook_prova si Explore      finto-rebase negato
+  hook_prova no ''           finto-rebase niente
   # fuori da Claude Code niente cambia: nessun diniego, i merge non si firmano, e
   # una persona che imposta la variabile ottiene il trailer che ha chiesto
   for o in commit commit-nv amend; do
@@ -566,6 +572,47 @@ va in fondo al messaggio.' -m 'Cantiere-Agent: devops'
 corpo_prova 'riga del corpo «Cantiere-Agent:» resta'       vero  'corpo:1 firma:qa-test,'
 corpo_prova 'python3 in errore: commit negato'           rotto negato
 
+echo; echo "Secondo strato — solo i trailer riconosciuti da git (collaudo di ownconsent-www #77)"
+# L'ultimo paragrafo e' prosa con una riga che comincia per «Cantiere-Agent:»: per
+# `git interpret-trailers --parse` non e' un blocco di trailer. In sessione la riga
+# spariva; fuori da Claude Code faceva uscire l'hook senza firmare.
+trailer_prova() { # etichetta, CLAUDECODE(si|no), scenario (prosa|amend), atteso
+  local T val
+  T=$(mktemp -d)
+  ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T/r" && cd "$T/r" && git config user.email p@p.invalid \
+    && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+    && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A
+    case "$3" in amend|alias*) CLAUDECODE=1 CANTIERE_AGENT=devops git commit -q -m 'feat: x' -m 'Reviewed-by: Umano <u@e.invalid>' ;; esac
+    # review della PR 17: con un alias git restituisce la chiave riscritta
+    [ "$3" = alias ] && git config trailer.coauthor.key 'Co-authored-by'
+    [ "$3" = alias-nome ] && git config trailer.Cantiere-Agent.key 'Ruolo'
+    [ "$2" = si ] && export CLAUDECODE=1
+    export CANTIERE_AGENT=qa-test
+    case "$3" in
+      prosa) git commit -q -m 'docs: esempio' -m 'Nota sul formato della firma.
+Cantiere-Agent: ora gestito dal nuovo hook
+Il resto del paragrafo e'"'"' prosa.' ;;
+      amend|alias*) git commit -q --amend --no-edit ;;
+    esac ) >/dev/null 2>&1
+  case "$3" in alias*)
+    # dal messaggio grezzo: con l'alias configurato anche git log rinominerebbe le chiavi
+    val="firme:$(git -C "$T/r" log -1 --format=%B 2>/dev/null | sed -n 's/^Cantiere-Agent: //p' | tr '\n' ',') coautori-cantiere:$(git -C "$T/r" log -1 --format=%B 2>/dev/null | grep -ci '^Co-Authored-By: cantiere-')"
+    if [ "$val" = "$4" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+    else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$4" "$val"; KO=$((KO+1)); fi
+    rm -rf "$T"; return ;;
+  esac
+  val="prosa:$(git -C "$T/r" log -1 --format=%B 2>/dev/null | grep -c '^Cantiere-Agent: ora gestito dal nuovo hook$') firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' 2>/dev/null | grep . | tr '\n' ',')"
+  if [ "$val" = "$4" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$4" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+trailer_prova 'in sessione: prosa «Cantiere-Agent:» in fondo resta' si prosa 'prosa:1 firma:qa-test,'
+trailer_prova 'fuori: la prosa non ferma la firma'               no prosa 'prosa:1 firma:qa-test,'
+trailer_prova 'in sessione: amend, firma vera sostituita'        si amend 'prosa:0 firma:qa-test,'
+trailer_prova 'fuori: amend, firma vera non duplicata'           no amend 'prosa:0 firma:devops,'
+trailer_prova 'amend con alias trailer.coauthor.key'             si alias 'firme:qa-test, coautori-cantiere:1'
+trailer_prova 'amend con alias che rinomina Cantiere-Agent'      si alias-nome 'firme:qa-test, coautori-cantiere:1'
+
 echo; echo "Secondo strato — la firma va dove git la legge: prima delle forbici, dentro il blocco dei trailer"
 inserisci_prova() { # etichetta, scenario, atteso
   local T val
@@ -574,6 +621,7 @@ inserisci_prova() { # etichetta, scenario, atteso
     && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
     && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A
     [ "$2" = crlf ] && sed -i 's/$/\r/' githooks/ruoli
+    [ "$2" = spazio ] && sed -i 's/$/ /; s/^qa-test/\t&/' githooks/ruoli
     [ "$2" = amend-v ] && CLAUDECODE=1 CANTIERE_AGENT=devops git commit -qm base
     export CLAUDECODE=1 CANTIERE_AGENT=qa-test
     case "$2" in
@@ -582,7 +630,7 @@ inserisci_prova() { # etichetta, scenario, atteso
       scissors) GIT_EDITOR='sed -i 1s/^/titolo/' git -c commit.cleanup=scissors commit -q ;;
       amend-v)  GIT_EDITOR=true git commit -q --amend -v ;;
       umano)    git commit -qm 'feat: y' -m 'Co-Authored-By: Umano <u@e.invalid>' ;;
-      crlf)     git commit -qm 'feat: y' ;;
+      crlf|spazio) git commit -qm 'feat: y' ;;
       ripiegato) git commit -qm 'feat: y' -m 'Reviewed-by: A <a@b.invalid>
  su due righe
 Refs: x' ;;
@@ -614,6 +662,7 @@ inserisci_prova '--amend -v su un commit firmato devops'       amend-v  'firma:q
 inserisci_prova 'il Co-Authored-By di una persona resta trailer' umano  'firma:qa-test, umano:1'
 inserisci_prova 'trailer ripiegato su due righe: resta trailer'  ripiegato 'firma:qa-test, refs:1'
 inserisci_prova 'githooks/ruoli con fine riga CRLF'            crlf     'firma:qa-test,'
+inserisci_prova 'githooks/ruoli con spazi in testa e in coda'  spazio   'firma:qa-test,'
 inserisci_prova '-m con una riga che comincia con #'            cancelletto 'firma:qa-test, cancelletto-prima-della-firma:si'
 inserisci_prova '-F con un #hashtag finale'                    hashtag     'firma:qa-test, cancelletto-prima-della-firma:si'
 inserisci_prova 'merge con conflitto e blocco # Conflicts:'    conflitto   'firma:qa-test, cancelletto-prima-della-firma:si'
@@ -668,6 +717,28 @@ case "$out" in
   *"COMMIT NEGATO"*"Se sei una persona, committa da un terminale fuori da Claude Code: anche i comandi dati con ! hanno CLAUDECODE=1"*"non si scrive a mano"*)
      printf "  ${V}ok${N}    %-52s %s\n" "senza ruolo: il messaggio nomina il caso del !" "testo presente"; OK=$((OK+1)) ;;
   *) printf "  ${X}KO${N}    %-52s %s\n" "senza ruolo: il messaggio nomina il caso del !" "testo assente"; KO=$((KO+1)) ;;
+esac
+rm -rf "$T"
+
+# review della PR 17: in sessione un rebase vero senza ruolo si ferma al primo commit
+# riapplicato e resta a meta' (limite noto). Il diniego deve dire come uscirne.
+T=$(mktemp -d); ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T" && cd "$T" && git config user.email p@p.invalid \
+  && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+  && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A && git commit -qm base \
+  && git switch -qc lato && echo l > l && git add -A && git commit -qm lato \
+  && git switch -q main && echo m > m && git add -A && git commit -qm main2 && git switch -q lato ) >/dev/null 2>&1
+out=$(env -u CANTIERE_AGENT CLAUDECODE=1 git -C "$T" rebase main 2>&1)
+case "$out" in
+  *"COMMIT NEGATO"*"C'e' un rebase in corso: per annullarlo, git rebase --abort. Se sei una persona, rifallo da un terminale fuori da Claude Code."*)
+     if [ -d "$T/.git/rebase-merge" ]; then printf "  ${V}ok${N}    %-52s %s\n" "rebase senza ruolo: negato, dice git rebase --abort" "testo presente"; OK=$((OK+1))
+     else printf "  ${X}KO${N}    %-52s %s\n" "rebase senza ruolo: negato, dice git rebase --abort" "il rebase non e' fermo"; KO=$((KO+1)); fi ;;
+  *) printf "  ${X}KO${N}    %-52s %s\n" "rebase senza ruolo: negato, dice git rebase --abort" "testo assente"; KO=$((KO+1)) ;;
+esac
+out=$(env -u CANTIERE_AGENT CLAUDECODE=1 git -C "$T" rebase --abort 2>&1; echo n > "$T/n"; git -C "$T" add -A; env -u CANTIERE_AGENT CLAUDECODE=1 git -C "$T" commit -qm x 2>&1)
+case "$out" in
+  *"rebase in corso"*) printf "  ${X}KO${N}    %-52s %s\n" "commit negato senza rebase: non lo nomina" "testo presente"; KO=$((KO+1)) ;;
+  *"COMMIT NEGATO"*)   printf "  ${V}ok${N}    %-52s %s\n" "commit negato senza rebase: non lo nomina" "testo assente"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s %s\n" "commit negato senza rebase: non lo nomina" "nessun diniego"; KO=$((KO+1)) ;;
 esac
 rm -rf "$T"
 

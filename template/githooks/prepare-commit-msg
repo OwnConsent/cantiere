@@ -21,7 +21,7 @@
 # 01/10 — perche' il diniego. Fino a oggi una variabile vuota valeva sempre «persona»
 # e l'hook usciva con 0. Misurato su ownconsent-www: dal 26/09 le sessioni sono
 # partite senza il plugin (nei transcript nessuna traccia dei suoi hook, mentre fino
-# al 25/09 ci sono in ogni sessione), quindi niente anteponeva la variabile e la
+# al 25/09 ci sono in 17 sessioni su 19), quindi niente anteponeva la variabile e la
 # firma dipendeva dall'agente che la scriveva a mano. Su 18 comandi di commit di
 # una sessione, l'unico senza la variabile e' uscito senza firma (cb63f2c, 29/09),
 # e il merge a1b665d (30/09) e' uscito senza firma per l'uscita anticipata sui merge.
@@ -48,6 +48,35 @@
 # plugin un agente puo' ancora dichiararsi da solo un ruolo valido, e da qui non si
 # distingue. Un merge fast-forward non crea commit e non passa di qui.
 #
+# 02/10 — dal collaudo di ownconsent-www #77 (l'hook copiato li' identico):
+# - in sessione l'uscita per rebase viene DOPO la validazione del ruolo: bastava
+#   `mkdir .git/rebase-merge` per committare senza ruolo e senza firma;
+# - la firma vecchia si toglie solo dalle righe che git riconosce come trailer, e
+#   fuori da Claude Code la guardia anti-duplicazione guarda solo quel blocco: una
+#   riga di prosa «Cantiere-Agent: ...» nell'ultimo paragrafo spariva in sessione, e
+#   fuori faceva uscire l'hook senza firmare;
+# - i nomi in githooks/ruoli si leggono senza spazi in testa e in coda.
+# 02/10 — dalla review della PR 17:
+# - `git interpret-trailers --parse` gira ISOLATO dalla configurazione (cartella /,
+#   niente config globale, di sistema o di riga di comando). Con un alias
+#   trailer.<x>.key nel repository git restituisce la chiave riscritta
+#   («Co-authored-by», o un nome del tutto diverso) e la firma vecchia non veniva
+#   piu' riconosciuta: dopo un amend restavano due co-autori cantiere. Misurato con
+#   git 2.43: isolato, le chiavi tornano come sono scritte nel messaggio;
+# - se il commit e' negato durante un rebase, il diniego dice come annullarlo.
+# Limiti noti, lasciati cosi':
+# - in sessione un rebase senza ruolo valido (`! git rebase main`, uno script che
+#   fa `git pull --rebase` senza nominare git) si ferma al primo commit riapplicato
+#   e resta a meta': va annullato con `git rebase --abort`;
+# - una cartella di rebase fabbricata a mano CON un ruolo valido fa uscire il commit
+#   senza firma: e' una falsificazione deliberata, come togliere CLAUDECODE;
+# - un messaggio a paragrafo singolo fatto solo di trailer («Reviewed-by: x» senza
+#   oggetto) non e' trattato come blocco di trailer: la firma va in un paragrafo
+#   nuovo e, se quel trailer e' una firma vecchia, resta come oggetto;
+# - fuori da Claude Code un errore di python lascia procedere il commit (anche con
+#   il messaggio scritto a meta', per esempio a disco pieno). E' voluto: li' la firma
+#   e' opzionale, e un hook che blocca il commit di una persona fa piu' danno.
+#
 # Storia: fino al 20/09 il ruolo stava in un file-marcatore condiviso. Si
 # sovrascriveva fra sessioni parallele e ogni SubagentStop annidato lo riazzerava:
 # per giorni quasi tutti i commit risultavano «orchestrator».
@@ -70,12 +99,20 @@ RUOLI="$(cd "$(dirname "$0")" && pwd)/ruoli"
 # `git rebase main` rifirmava col ruolo corrente tutti i commit del ramo.
 # Limite: anche un commit NUOVO fatto durante una sosta del rebase passa di qui, e
 # resta senza firma.
-for d in rebase-merge rebase-apply; do
-  [ -d "$(git rev-parse --git-path "$d" 2>/dev/null)" ] && exit 0
-done
+# In sessione l'uscita viene dopo la validazione del ruolo (collaudo di
+# ownconsent-www #77): la cartella si crea con un mkdir, e messa qui in cima faceva
+# passare un commit senza ruolo. Fuori da Claude Code resta la prima cosa.
+in_rebase() {
+  local d
+  for d in rebase-merge rebase-apply; do
+    [ -d "$(git rev-parse --git-path "$d" 2>/dev/null)" ] && return 0
+  done
+  return 1
+}
 
 nega() {
   printf 'COMMIT NEGATO: %s\n' "$1" >&2
+  in_rebase && printf 'C'"'"'e'"'"' un rebase in corso: per annullarlo, git rebase --abort. Se sei una persona, rifallo da un terminale fuori da Claude Code.\n' >&2
   printf 'La firma la mette il plugin cantiere (hook agent-env.py), ricavando il ruolo dalla sessione: non si scrive a mano. Se manca, il plugin non e'"'"' attivo in questa sessione o il ruolo non e'"'"' ricavabile. Fermati e riportalo ad Andrea.\n' >&2
   exit 1
 }
@@ -85,10 +122,13 @@ if [ "${CLAUDECODE:-}" = "1" ]; then
   # una riga sola, solo un nome: grep -x con un valore su piu' righe le prova tutte
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || nega "CANTIERE_AGENT non e' un nome di ruolo."
   [ -r "$RUOLI" ] || nega "manca l'elenco dei ruoli ($RUOLI): non posso verificare «$AGENTE»."
-  # \r: con core.autocrlf l'elenco puo' arrivare con fine riga CRLF
-  tr -d '\r' < "$RUOLI" | grep -v '^[[:space:]]*#' | grep -qxF -- "$AGENTE" \
+  # \r: con core.autocrlf l'elenco puo' arrivare con fine riga CRLF. Spazi e tab in
+  # testa e in coda al nome si tolgono: uno spazio in coda negava un ruolo vero.
+  tr -d '\r' < "$RUOLI" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^#' | grep -qxF -- "$AGENTE" \
     || nega "«$AGENTE» non e' un ruolo di cantiere (elenco: githooks/ruoli)."
+  in_rebase && exit 0
 else
+  in_rebase && exit 0
   case "$SORGENTE" in merge|squash) exit 0 ;; esac
   [ -z "$AGENTE" ] && exit 0
   # difesa: solo un nome di ruolo, mai altro testo dentro il messaggio
@@ -99,7 +139,11 @@ fi
 # - In sessione la firma dice chi ha fatto QUESTO commit: una firma gia' nel blocco
 #   dei trailer (ereditata da --amend, -c, -C, cherry-pick, squash, reword, o scritta
 #   a mano) si toglie e si mette quella del ruolo corrente. Si guarda solo l'ultimo
-#   paragrafo: una riga del CORPO che comincia con «Cantiere-Agent:» resta dov'e'.
+#   paragrafo, e solo se per `git interpret-trailers --parse` e' un blocco di
+#   trailer: una riga del CORPO che comincia con «Cantiere-Agent:» resta dov'e',
+#   anche quando sta nell'ultimo paragrafo.
+# - Fuori da Claude Code, se nel blocco dei trailer c'e' gia' una firma (amend) non
+#   se ne aggiunge un'altra. Una riga di prosa «Cantiere-Agent: ...» non conta.
 # - La firma va PRIMA dei commenti e della riga delle forbici: accodata in fondo,
 #   con `commit -v`, commit.verbose o cleanup=scissors finiva sotto le forbici e git
 #   la scartava (commit senza firma, uscita 0: terza review, 02/10).
@@ -121,12 +165,7 @@ fi
 #   l'oggetto del commit diventa la firma, e git non abortisce per messaggio vuoto.
 # Se python fallisce, in sessione il commit e' negato: meglio fermo che senza firma.
 SOSTITUISCI=0
-if [ "${CLAUDECODE:-}" = "1" ]; then
-  SOSTITUISCI=1
-else
-  # fuori da Claude Code: se la firma c'e' gia' (amend), non duplicarla
-  grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
-fi
+[ "${CLAUDECODE:-}" = "1" ] && SOSTITUISCI=1
 python3 - "$MSG_FILE" "$AGENTE" "$SOSTITUISCI" <<'PY_EOF'
 import os, re, subprocess, sys
 f, agente, sostituisci = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
@@ -145,20 +184,48 @@ inizio = max(ultimo, 0)
 while inizio > 0 and testa[inizio - 1].strip():
     inizio -= 1
 paragrafo = testa[inizio:]
+# e' un blocco di trailer se lo dice git: riconosce anche i trailer ripiegati su piu'
+# righe e «(cherry picked from commit ...)», che una regola scritta qui perdeva.
+# Restituisce i trailer che git vede nel paragrafo, «Chiave: valore» su una riga.
+# Isolato dalla configurazione: un alias trailer.<x>.key riscrive le chiavi in uscita,
+# e qui servono come sono scritte nel messaggio.
+isolato = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG") and k not in ("GIT_DIR", "GIT_WORK_TREE")}
+isolato.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+def trailer_di(par):
+    if inizio == 0 or not par:
+        return []
+    visti = subprocess.run(["git", "interpret-trailers", "--parse"], capture_output=True,
+                           text=True, input="oggetto\n\n" + "\n".join(par) + "\n",
+                           cwd="/", env=isolato)
+    return [t for t in visti.stdout.split("\n") if t.strip()] if visti.returncode == 0 else []
+# una riga del paragrafo e' un trailer se git l'ha restituita: stessa chiave e
+# stesso inizio del valore (git normalizza «chiave:valore» e unisce le righe ripiegate)
+def riconosciuta(riga, visti):
+    chiave, _, valore = riga.partition(":")
+    norma = f"{chiave.rstrip()}: {valore.strip()}".rstrip()
+    return any(t.rstrip() == norma or t.startswith(norma + " ") for t in visti)
+firma = re.compile(r"(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
+visti = trailer_di(paragrafo)
 if sostituisci:
-    firma = re.compile(r"(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
-    paragrafo = [r for r in paragrafo if not firma.match(r)]
+    pulito, tolta = [], False
+    for r in paragrafo:
+        if firma.match(r) and riconosciuta(r, visti):
+            tolta = True
+        elif tolta and r[:1] in (" ", "\t"):
+            pass            # il seguito ripiegato di una firma tolta
+        else:
+            pulito.append(r)
+            tolta = False
+    if pulito != paragrafo:
+        paragrafo = pulito
+        visti = trailer_di(paragrafo)
+elif any(t.startswith("Cantiere-Agent:") for t in visti):
+    sys.exit(0)             # fuori da Claude Code la firma c'e' gia' (amend): non duplicarla
 corpo = testa[:inizio] + paragrafo
 while corpo and not corpo[-1].strip():
     corpo.pop()
-# e' un blocco di trailer se lo dice git: riconosce anche i trailer ripiegati su piu'
-# righe e «(cherry picked from commit ...)», che una regola scritta qui perdeva
-trailer = False
-if inizio > 0 and paragrafo:
-    visti = subprocess.run(["git", "interpret-trailers", "--parse"], capture_output=True,
-                           text=True, input="oggetto\n\n" + "\n".join(paragrafo) + "\n")
-    trailer = visti.returncode == 0 and bool(visti.stdout.strip())
-if not trailer:
+if not visti:
     corpo.append("")
 if ultimo < 0:          # messaggio ancora vuoto (editor): riga 1 per il titolo, poi una vuota
     corpo.append("")
