@@ -55,17 +55,37 @@ Per questo il diniego riporta l'agent_type ricevuto: se una versione futura di
 Claude Code cambia formato, si vede subito. Il filo principale, senza
 agent_type, resta orchestrator.
 
-Limiti, coperti dal secondo strato (il git hook nega un commit senza ruolo
-valido): uno script che lancia git senza nominarlo nel comando non viene
-riscritto; un'assegnazione nascosta in un heredoc dato in pasto a una shell non
-viene vista. E questo hook esiste solo se il plugin e' attivo nella sessione.
+02/10 — seconda review. La manomissione cercata solo dopo aver riconosciuto
+`git commit` lasciava passare `CANTIERE_AGENT=orchestrator git "commit"` e
+`... git -C "/tmp/a b" commit`: ora si cerca in ogni comando che nomina git,
+fuori da virgolette e heredoc. Il verbo si riconosce fuori dalle virgolette e
+senza trattino dopo: `git merge-base` e `grep "git commit"` da un agente non di
+cantiere erano negati. -am, -F, --message= e -m attaccato sono prosa come -m.
+
+CONFINE (decisione di Andrea). Questo hook e' un parser parziale della shell e
+non sara' mai completo. Un agente che scrive uno script contenente
+`CANTIERE_AGENT=<ruolo valido> git commit` e lo esegue falsifica la firma: qui
+non si vede, e il git hook accetta il ruolo perche' e' valido. La firma protegge
+da errore e dimenticanza, non da un agente che vuole falsificarla.
+Regola per le review: un finding sul parser si corregge solo se apre una
+falsificazione con un comando diretto o se blocca lavoro legittimo. Il resto va
+nei limiti noti.
+
+Limiti noti: uno script che lancia git senza nominarlo nel comando non viene
+riscritto; un'assegnazione dentro un heredoc dato in pasto a una shell, dentro
+`eval "..."` o in una stringa quotata che non sia `sh -c` non viene vista; un
+verbo fra virgolette (`git "commit"`) da un agente non di cantiere non e' negato
+qui ma dal git hook. `CANTIERE_AGENT=x git status` e' negato anche se non firma
+niente. E questo hook esiste solo se il plugin e' attivo nella sessione.
 """
 import json, os, re, sys
 
 VAR = "CANTIERE_AGENT"
-# git, eventuali opzioni globali (-C dir, -c k=v, --no-pager, ...), poi il verbo
+# git, eventuali opzioni globali (-C dir, -c k=v, --no-pager, ...), poi il verbo.
+# Niente trattino dopo: merge-base, merge-tree, commit-graph, commit-tree leggono.
 CREA_COMMIT = re.compile(
-    r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--?[A-Za-z][\w-]*(?:=\S+)?))*\s+(commit|merge)\b")
+    r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--?[A-Za-z][\w-]*(?:=\S+)?))*\s+(commit|merge)(?![\w-])")
+QUOTATO = r"""("(?:\\.|[^"\\])*"|'[^']*')"""
 
 def ruoli_validi():
     d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agents")
@@ -74,34 +94,41 @@ def ruoli_validi():
     except OSError:
         return set()
 
-def senza_prosa(cmd):
-    """Toglie il testo che non viene eseguito: corpi di heredoc e argomenti
-    quotati di -m/--message/--body/--title. Un messaggio di commit che cita la
-    variabile non e' un'assegnazione (stessa regola di guard-paths, 23/09)."""
+def eseguito(cmd):
+    """Quello che la shell esegue davvero, tolto il testo: corpi di heredoc,
+    stringhe fra virgolette (ridotte a un segnaposto Q), messaggi di commit.
+    E' un parser parziale: vedi il confine nel commento in testa."""
     # del heredoc si toglie solo il CORPO: il resto della riga di apertura la shell
     # lo esegue (`cat <<EOF | CANTIERE_AGENT=x git commit -F -`), e va guardato
     cmd = re.sub(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?\n\s*\3\b", r"\1", cmd, flags=re.S)
-    return re.sub(r"""(?:-m|--message|--body|--title)(?:=|\s+)("(?:\\.|[^"\\])*"|'[^']*')""",
-                  " ", cmd)
+    # `bash -c "..."` e' un comando diretto: la stringa si apre e si guarda dentro
+    cmd = re.sub(r"\b(?:ba|z|da)?sh\s+(?:-\w+\s+)*-\w*c\s+" + QUOTATO,
+                 lambda m: " ; " + m.group(1)[1:-1].replace('\\"', '"') + " ; ", cmd)
+    cmd = re.sub(QUOTATO, "Q", cmd)
+    # -m, -am, -F, --message, --file, --body, --title: quello che segue e' prosa
+    cmd = re.sub(r"(?<=\s)(?:-[A-Za-z]*[mF]|--message|--file|--body|--title)(?:=\S*|\s+\S+|\S+)",
+                 " ", cmd)
+    return cmd
 
-def manomissione(cmd, ruolo):
+def manomissione(testo, ruolo):
     """Restituisce il motivo se il comando svuota, toglie o forza la variabile."""
-    testo = senza_prosa(cmd)
     if re.search(r"\bunset\s+(?:-\w+\s+)*" + VAR + r"\b", testo):
         return f"il comando toglie {VAR} con unset"
     if re.search(r"(?:-u\s*|--unset[=\s]\s*)" + VAR + r"\b", testo):
         return f"il comando toglie {VAR} con env -u"
-    for m in re.finditer(r"(?<![\w$])" + VAR + r"=(\"[^\"]*\"|'[^']*'|[^\s;&|)]*)", testo):
-        valore = m.group(1).strip("\"'")
+    for m in re.finditer(r"(?<![\w$])" + VAR + r"=([^\s;&|)]*)", testo):
+        valore = m.group(1)
         if valore != ruolo:
-            cosa = f"forza {VAR}=«{valore}»" if valore else f"svuota {VAR}"
+            cosa = (f"svuota {VAR}" if not valore else
+                    f"assegna {VAR} fra virgolette" if "Q" == valore else
+                    f"forza {VAR}=«{valore}»")
             return f"il comando {cosa}, ma questa chiamata viene da «{ruolo}»"
     return None
 
 def nega(motivo):
     print(f"FIRMA: {motivo}. La firma dei commit viene dalla sessione, non si "
-          f"dichiara a mano: togli {VAR} dal comando che committa e rilancialo "
-          f"(se la variabile compare solo come testo, committa in un comando a parte).",
+          f"dichiara a mano: togli {VAR} dal comando e rilancialo "
+          f"(se la variabile compare solo come testo, mettila fra virgolette).",
           file=sys.stderr)
     sys.exit(2)
 
@@ -130,10 +157,12 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
 
-    # la manomissione conta solo dove nasce un commit: `git grep "CANTIERE_AGENT="`
-    # o `git log -S` nominano la variabile senza firmare niente
-    crea = CREA_COMMIT.search(senza_prosa(cmd))
-    motivo = manomissione(cmd, ruolo) if crea else None
+    # La manomissione si cerca in OGNI comando che nomina git, senza dipendere dal
+    # riconoscere il verbo: `git "commit"` o `git -C "a b" commit` lo nascondevano,
+    # e il ruolo forzato passava.
+    testo = eseguito(cmd)
+    crea = CREA_COMMIT.search(testo)
+    motivo = manomissione(testo, ruolo)
     if motivo:
         nega(motivo)
     if crea and not (di_cantiere and ruolo in ruoli_validi()):

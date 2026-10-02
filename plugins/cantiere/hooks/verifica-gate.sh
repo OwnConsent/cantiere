@@ -336,8 +336,26 @@ titolo
 EOF"                                                                                                              deny
 agente_prova 'git grep della variabile non e manomissione' ''             'git grep -n "CANTIERE_AGENT=" plugins' orchestrator
 agente_prova 'git log -S della variabile'              'cantiere:qa-test' 'git log -S"CANTIERE_AGENT=" --oneline' qa-test
+# seconda review (02/10): la manomissione non dipende dal riconoscere il verbo
+agente_prova 'forzata, git -C con uno spazio fra virgolette' 'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git -C "/tmp/a b" commit -m x' deny
+agente_prova 'forzata, git -c con un valore quotato'   'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git -c user.name="A B" commit -m x' deny
+agente_prova 'forzata, verbo fra virgolette'           'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git "commit" -m x' deny
+agente_prova 'forzata su un comando che non firma'     ''                 'CANTIERE_AGENT=devops git status'     deny
+agente_prova 'uguale al payload, fra virgolette'       ''                 'CANTIERE_AGENT="orchestrator" git commit -m x' deny
+agente_prova '-am con la variabile nel messaggio'      ''                 'git commit -am "fix: CANTIERE_AGENT= vuota"' orchestrator
+agente_prova '--message= con la variabile'             ''                 'git commit --message="CANTIERE_AGENT=x citata"' orchestrator
+agente_prova '-m attaccato al messaggio'               ''                 'git commit -m"CANTIERE_AGENT= attaccata"' orchestrator
+agente_prova '-m senza virgolette'                     ''                 'git commit -m CANTIERE_AGENT=x'       orchestrator
+agente_prova '-F da file'                              'cantiere:devops'  'git commit -F msg.txt'                devops
 
 echo; echo "Primo strato — chi non e' un ruolo di cantiere non committa"
+agente_prova 'Explore: git -C con spazio, commit'      'Explore'          'git -C "/tmp/a b" commit -m x'        deny
+agente_prova 'Explore: git merge-base legge'           'Explore'          'git merge-base main HEAD'             Explore
+agente_prova 'general-purpose: git merge-tree legge'   'general-purpose'  'git merge-tree main lato'             general-purpose
+agente_prova 'Explore: git commit-graph legge'         'Explore'          'git commit-graph verify'              Explore
+agente_prova 'Explore: grep di "git commit"'           'Explore'          'grep -rn "git commit" plugins'        Explore
+agente_prova 'general-purpose: echo che cita git merge' 'general-purpose' 'git log --oneline; echo "poi git merge"' general-purpose
+agente_prova 'Explore: bash -c "git commit"'           'Explore'          'bash -c "git commit -m x"'            deny
 agente_prova 'Explore: commit con heredoc in pipe'     'Explore'          "cat <<'EOF' | git commit -F -
 titolo
 EOF"                                                                                                              deny
@@ -450,20 +468,50 @@ eredita_prova() { # sorgente, atteso (<ruolo>x<quante firme>), [mantieni CLAUDEC
       squash)       git merge -q --squash lato && git commit -q --no-edit ;;
       merge-m)      echo n > n && git add -A && CANTIERE_AGENT=devops git commit -qm d \
                       && git merge -q --no-ff -m 'merge' -m 'Cantiere-Agent: devops' lato ;;
+      reword)       git switch -q lato && GIT_SEQUENCE_EDITOR="sed -i s/^pick/reword/" git rebase -q -i HEAD~1 ;;
+      due-firme)    echo n > n && git add -A && git commit -qm 'feat: x' -m 'Cantiere-Agent: devops
+Cantiere-Agent: seo
+Co-Authored-By: Umano <umano@esempio.invalid>' ;;
       a-mano)       echo n > n && git add -A && git commit -qm 'feat: x' -m 'Cantiere-Agent: orchestrator' ;;
     esac
   ) >/dev/null 2>&1
-  val=$(git -C "$R" log -1 HEAD --format=%B | grep -E '^[[:space:]]*Cantiere-Agent:' | sed 's/^ *Cantiere-Agent: //' | sort | uniq -c | awk '{printf "%sx%s ", $2, $1}' | sed 's/ $//')
+  val=$(git -C "$R" log -1 HEAD --format='%(trailers:key=Cantiere-Agent,valueonly)' | grep . | sort | uniq -c | awk '{printf "%sx%s ", $2, $1}' | sed 's/ $//')
   [ -n "$val" ] || val=niente
   if [ "$val" = "$2" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$etichetta" "$val"; OK=$((OK+1))
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$etichetta" "$2" "$val"; KO=$((KO+1)); fi
   rm -rf "$T"
 }
-for o in amend amend-m commit-C commit-c cherry-pick revert squash merge-m a-mano; do
+for o in amend amend-m commit-C commit-c cherry-pick revert squash merge-m reword due-firme a-mano; do
   eredita_prova "$o" qa-testx1
 done
 # fuori da Claude Code un amend non tocca la firma che c'e'
 eredita_prova amend devopsx1 no
+
+echo; echo "Secondo strato — il corpo del messaggio non si tocca; se la riscrittura fallisce, si nega"
+corpo_prova() { # etichetta, python (vero|rotto), atteso
+  local T val rc
+  T=$(mktemp -d)
+  ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T/r" && cd "$T/r" && git config user.email p@p.invalid \
+    && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+    && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A \
+    && mkdir "$T/bin" && printf '#!/bin/sh\nexit 1\n' > "$T/bin/python3" && chmod +x "$T/bin/python3" ) >/dev/null 2>&1
+  (
+    cd "$T/r"; [ "$2" = rotto ] && PATH="$T/bin:$PATH"
+    env -u CLAUDECODE CLAUDECODE=1 CANTIERE_AGENT=qa-test PATH="$PATH" git commit -q -m 'docs: esempio' \
+      -m 'Esempio di trailer:
+Cantiere-Agent: devops
+va in fondo al messaggio.' -m 'Cantiere-Agent: devops'
+  ) >/dev/null 2>&1; rc=$?
+  if [ "$rc" -ne 0 ] && ! git -C "$T/r" rev-parse -q --verify HEAD >/dev/null 2>&1; then val=negato
+  else
+    val="corpo:$(git -C "$T/r" log -1 --format=%b | sed '/^$/q' | grep -c '^Cantiere-Agent: devops$') firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | grep . | tr '\n' ',')"
+  fi
+  if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+corpo_prova 'riga del corpo «Cantiere-Agent:» resta'       vero  'corpo:1 firma:qa-test,'
+corpo_prova 'python3 in errore: commit negato'           rotto negato
 
 echo; echo "Secondo strato — il diniego dice a una persona cosa fare (! ha CLAUDECODE=1)"
 T=$(mktemp -d); ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T" && cd "$T" && git config user.email p@p.invalid \

@@ -34,7 +34,13 @@
 # - in sessione ogni firma gia' presente nel messaggio viene sostituita da quella del
 #   ruolo corrente. Misurato con git 2.43: l'hook gira con sorgente «commit» per
 #   --amend, -c e -C, «message» per cherry-pick e revert, «squash» dopo merge
-#   --squash; NON gira su rebase, che conserva le firme dei commit riscritti;
+#   --squash. Un rebase non interattivo NON passa dall'hook e conserva le firme dei
+#   commit riscritti; `rebase -i` con reword si', e rifirma col ruolo corrente
+#   (misura della seconda review). La sostituzione guarda solo l'ultimo paragrafo.
+#   `git interpret-trailers --if-exists replace` non basta: toglie solo il trailer
+#   piu' vicino («The deleted trailer will be the closest one», git-interpret-
+#   trailers(1); provato: con due firme ne resta una vecchia) e sostituirebbe il
+#   Co-Authored-By di una persona. Per questo resta python, e se fallisce si nega;
 # - anche i comandi dati con ! dentro Claude Code hanno CLAUDECODE=1 (misurato da
 #   Andrea: `! env | grep CLAUDECODE` -> CLAUDECODE=1). Si lascia cosi': una persona
 #   committa da un terminale fuori da Claude Code, e il diniego lo dice.
@@ -75,29 +81,39 @@ else
 fi
 
 if [ "${CLAUDECODE:-}" = "1" ]; then
-  # La firma dice chi ha fatto QUESTO commit: una firma gia' nel messaggio (ereditata
-  # da --amend, -c, -C, cherry-pick, revert, squash, o scritta a mano) si toglie, e
-  # sotto si rimette quella del ruolo corrente. Ne resta una sola.
-  python3 - "$MSG_FILE" <<'PY_EOF'
+  # La firma dice chi ha fatto QUESTO commit: una firma gia' nel blocco dei trailer
+  # (ereditata da --amend, -c, -C, cherry-pick, squash, reword, o scritta a mano) si
+  # toglie, e sotto si rimette quella del ruolo corrente. Ne resta una sola.
+  # Si guarda solo l'ultimo paragrafo: una riga del CORPO che comincia con
+  # «Cantiere-Agent:» e' testo e resta dov'e'. Se python fallisce il commit e'
+  # negato: meglio fermo che con due firme.
+  python3 - "$MSG_FILE" <<'PY_EOF' || nega "non sono riuscito a riscrivere la firma nel messaggio (python3 mancante o in errore)."
 import re, sys
 f = sys.argv[1]
 righe = open(f, encoding="utf-8", errors="replace").read().split("\n")
-firma = re.compile(r"\s*(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
-open(f, "w", encoding="utf-8").write("\n".join(r for r in righe if not firma.match(r)))
+# dopo la riga delle forbici c'e' il diff di `commit -v`; le righe # sono commenti
+fine = next((i for i, r in enumerate(righe) if re.match(r"# -+ >8 -+", r)), len(righe))
+ultimo = max((i for i in range(fine) if righe[i].strip() and not righe[i].startswith("#")), default=-1)
+inizio = ultimo
+while inizio > 0 and righe[inizio - 1].strip():
+    inizio -= 1
+firma = re.compile(r"(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
+tolte = {i for i in range(max(inizio, 0), ultimo + 1) if firma.match(righe[i])}
+testo = "\n".join(r for i, r in enumerate(righe) if i not in tolte)
+open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
 PY_EOF
 else
   # fuori da Claude Code: se la firma c'e' gia' (amend), non duplicarla
   grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
-fi
-
-# git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
-# con zero li legge come corpo, con due come paragrafo a se' (commit d5e8331, 13/09).
-python3 - "$MSG_FILE" <<'PY_EOF'
+  # git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
+  # con zero li legge come corpo, con due come paragrafo a se' (commit d5e8331, 13/09).
+  python3 - "$MSG_FILE" <<'PY_EOF'
 import sys
 f = sys.argv[1]
 testo = open(f, encoding="utf-8", errors="replace").read()
 open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
 PY_EOF
+fi
 
 printf 'Cantiere-Agent: %s\nCo-Authored-By: cantiere-%s <%s@cantiere.invalid>\n' \
   "$AGENTE" "$AGENTE" "$AGENTE" >> "$MSG_FILE"
