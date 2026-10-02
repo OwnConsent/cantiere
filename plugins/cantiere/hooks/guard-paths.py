@@ -14,33 +14,56 @@ node -e, uno heredoc) arriva come un unico token pieno di "/" che non sono perco
 produce falsi positivi. Il livello 4 recupera ciò che conta davvero, perché per
 uscire dal progetto da dentro del codice serve quasi sempre una risalita.
 
+PRINCIPIO. Quando si allenta un gate, l'allentamento e' un ELENCO CHIUSO di casi
+ammessi, mai un elenco di casi pericolosi da escludere. La prima versione della PR
+18 toglieva il corpo degli heredoc quotati salvo per gli interpreti noti, e ogni
+interprete dimenticato e' diventato un'uscita: `source /dev/stdin <<'EOF'`,
+`xargs cat <<'EOF'`, `while read ...; done <<'EOF'`, `uv run - <<'EOF'`, `php`,
+`bash<<'EOF'` (review della #18, 02/10).
+
 02/10 — heredoc quotati e sostituzioni di comando (misurato passando i payload):
 - il corpo di un heredoc con delimitatore quotato (<<'EOF', <<"EOF", <<\EOF) e'
-  TESTO: la shell non lo espande. shlex non conosce gli heredoc e lo spezzava in
+  testo, la shell non lo espande; shlex non conosce gli heredoc e lo spezzava in
   parole, cosi' `gh pr create --body-file - <<'EOF'` era negato perche' la
-  descrizione citava un percorso fuori dal progetto. Ora quel corpo si toglie prima
-  dei livelli 2 e 3. Resta scandito se l'heredoc non e' quotato (li' $(...) si
-  esegue) o se sulla riga che lo apre c'e' un interprete (bash, python3, ...):
-  allora e' codice;
+  descrizione citava un percorso fuori dal progetto. Quel corpo si toglie prima dei
+  livelli 2 e 3 SOLO se la riga che apre l'heredoc e' un comando solo, e il comando
+  e' nell'elenco: gh, git, tee, cat con redirezione su file; dentro una $(...) anche
+  cat da solo, perche' li' la sua uscita e' il testo della stringa
+  (`--body "$(cat <<'EOF' ...)"`, la forma piu' usata, che su main passava).
+  Nessun'altra parte della riga ne cambia il destino: con una pipe, un `;`, un `&&`,
+  una sostituzione o un altro comando sulla riga il corpo resta scandito, e cosi' in
+  ogni caso fuori elenco, come prima;
+- << si riconosce solo fuori dalle virgolette e fuori dai commenti: `echo "<<'X'"`
+  seguito da comandi veri li faceva sparire come «corpo»;
 - --opzione=valore con un'opzione di testo (--body=...) e' testo come la forma
   separata;
 - dentro una stringa fra virgolette doppie la shell esegue $(...) e i backtick.
   Il token ha spazi e il livello 3 lo saltava, il livello 4 cerca solo risalite:
   `--body "$(cat /percorso/assoluto/fuori)"` passava. Ora il contenuto di ogni
   sostituzione si scandisce come un comando, ai livelli 2 e 3. Fra apici singoli
-  no: la shell non la esegue.
+  no: la shell non la esegue. Le parentesi di $(...) si contano rispettando le
+  virgolette e saltando i corpi degli heredoc;
+- nei corpi di heredoc rimasti e nei commenti le sostituzioni si cercano SENZA
+  stato delle virgolette: li' un apostrofo non apre niente, e «l'hook legge
+  $(cat /fuori)» nascondeva la sostituzione.
 
 CONFINE. Come agent-env.py, questo hook e' un parser parziale della shell e non
 sara' mai completo: un finding sul parser si corregge solo se apre un'uscita con
 un comando diretto o se blocca lavoro legittimo. Limiti noti:
 - un heredoc quotato che diventa codice piu' tardi: `cat <<'EOF' > x.sh` e poi
-  `bash x.sh`, o un interprete su una riga diversa da quella che apre l'heredoc
-  (sulla stessa riga, come `cat <<'EOF' | bash`, il corpo resta scandito);
+  `bash x.sh`; `bash -c "$(cat <<'EOF' ...)"` ed `eval "$(cat <<'EOF' ...)"`
+  (passavano anche prima); un alias di git o di gh che lancia una shell;
+- falsi dinieghi sui comandi fuori elenco: un heredoc quotato che cita un percorso
+  fuori dal progetto resta negato se lo riceve un altro comando, se il comando ha
+  un prefisso (`VAR=x gh ...`, `/usr/bin/gh`), se sulla riga c'e' una pipe, un
+  altro comando o una sostituzione, o se l'heredoc sta in una $(...) non fra
+  virgolette;
 - una risalita ../ citata in prosa resta negata dal livello 4, per scelta;
 - un percorso assoluto dentro un corpo di codice (`python3 -c "open('/x/y')"`): il
   token ha spazi e non c'e' risalita;
-- le parentesi di $(...) si contano senza guardare le virgolette al loro interno, e
-  << dentro una stringa fra virgolette e' letto come heredoc.
+- un `case` dentro $(...): la `)` del pattern chiude la sostituzione prima del
+  dovuto e il resto non si scandisce come suo contenuto;
+- una sostituzione citata in un commento si scandisce lo stesso (falso diniego).
 
 Exit 2 = negato, il motivo su stderr torna all'agente.
 """
@@ -86,65 +109,177 @@ def fuori_perimetro(risolto, project):
 TESTO = {"-m", "--message", "--body", "-b", "--title", "-t", "--notes", "-d",
          "--description", "--subject"}
 
-INTERPRETE = re.compile(r"(sh|bash|zsh|dash|ksh|python[\d.]*|node|perl|ruby)")
-APRE = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([\w.-]+)\1|\\([\w.-]+)|([\w.-]+))")
+FINE_PAROLA = " \t\n;|&<>()"
 
 
-def senza_heredoc_quotati(cmd):
-    """Il comando senza il corpo degli heredoc a delimitatore quotato: e' testo che
-    la shell non espande. Resta dov'e' se l'heredoc non e' quotato, se sulla riga
-    che lo apre c'e' un interprete, o se il delimitatore di chiusura non si trova."""
-    righe, fuori, i = cmd.split("\n"), [], 0
-    while i < len(righe):
-        riga = righe[i]
-        fuori.append(riga)
-        i += 1
-        interprete = any(INTERPRETE.fullmatch(p.rsplit("/", 1)[-1])
-                         for p in re.split(r"[\s;|&()]+", riga))
-        for m in APRE.finditer(riga):
-            delim = m.group(2) or m.group(3) or m.group(4)
-            fine = next((k for k in range(i, len(righe)) if righe[k].strip() == delim), None)
-            if fine is None:
-                break
-            if not (m.group(2) or m.group(3)) or interprete:
-                fuori.extend(righe[i:fine + 1])
-            i = fine + 1
-    return "\n".join(fuori)
-
-
-def sostituzioni(s):
-    """Il contenuto di ogni $(...) e di ogni `...` che la shell eseguirebbe: fuori
-    dalle virgolette e dentro le doppie, non fra apici singoli."""
-    trovate, i, n, singolo, doppio = [], 0, len(s), False, False
+def percorri(s, i=0, chiusa=False):
+    """Percorre un testo di shell da i, a un solo livello. Restituisce:
+    (fine, sostituzioni, heredoc, commenti).
+    - sostituzioni: il contenuto di ogni $(...) e `...` che la shell eseguirebbe,
+      cioe' fuori dalle virgolette o dentro le doppie, non fra apici singoli;
+    - heredoc: per ognuno la riga che lo apre, il corpo (con la riga di chiusura) e
+      se il delimitatore e' quotato. << conta solo fuori da virgolette e commenti, e
+      un heredoc senza chiusura non c'e';
+    - commenti: da # a fine riga.
+    Con chiusa=True si ferma alla ) che chiude la $( gia' aperta: e' cosi' che le
+    parentesi si contano rispettando virgolette e corpi di heredoc."""
+    n = len(s)
+    sost, heredoc, commenti, attesi = [], [], [], []
+    doppio, aperte, riga = False, 0, i
     while i < n:
         c = s[i]
-        if singolo:
-            singolo = c != "'"
-        elif c == "\\":
-            i += 1
-        elif c == "'" and not doppio:
-            singolo = True
-        elif c == '"':
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and not doppio:
+            j = s.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == '"':
             doppio = not doppio
         elif c == "$" and s[i + 1:i + 2] == "(":
-            j, aperte = i + 2, 1
-            while j < n and aperte:
-                aperte += {"(": 1, ")": -1}.get(s[j], 0)
-                j += 1
-            trovate.append(s[i + 2:j - 1] if not aperte else s[i + 2:])
+            j = percorri(s, i + 2, True)[0]
+            sost.append(s[i + 2:j - 1] if s[j - 1:j] == ")" else s[i + 2:j])
             i = j
             continue
         elif c == "`":
-            j = s.find("`", i + 1)
+            j = i + 1
+            while j < n and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            sost.append(s[i + 1:j])
+            i = j + 1
+            continue
+        elif doppio:
+            pass
+        elif c == "(":
+            aperte += 1
+        elif c == ")":
+            if chiusa and aperte == 0:
+                return i + 1, sost, heredoc, commenti
+            aperte = max(aperte - 1, 0)
+        elif c == "#" and (i == 0 or s[i - 1] in FINE_PAROLA):
+            j = s.find("\n", i)
             j = n if j < 0 else j
-            trovate.append(s[i + 1:j])
+            commenti.append((i, j))
             i = j
+            continue
+        elif c == "<" and s[i + 1:i + 2] == "<" and s[i + 2:i + 3] != "<" and s[i - 1:i] != "<":
+            j = i + 2
+            if s[j:j + 1] == "-":
+                j += 1
+            while j < n and s[j] in " \t":
+                j += 1
+            delim, quotato = "", False
+            while j < n and s[j] not in FINE_PAROLA:
+                if s[j] in "'\"":
+                    k = s.find(s[j], j + 1)
+                    k = n if k < 0 else k
+                    delim, quotato, j = delim + s[j + 1:k], True, k + 1
+                elif s[j] == "\\":
+                    delim, quotato, j = delim + s[j + 1:j + 2], True, j + 2
+                else:
+                    delim, j = delim + s[j], j + 1
+            if delim:
+                attesi.append((delim, quotato))
+            i = j
+            continue
+        elif c == "\n":
+            for delim, quotato in attesi:
+                pos, fine = i + 1, None
+                while pos <= n:
+                    k = s.find("\n", pos)
+                    k = n if k < 0 else k
+                    if s[pos:k].strip() == delim:
+                        fine = k
+                        break
+                    pos = k + 1
+                if fine is None:
+                    break
+                heredoc.append({"riga": (riga, i), "corpo": (i + 1, min(fine + 1, n)),
+                                "quotato": quotato})
+                i = fine
+            attesi = []
+            riga = i + 1
         i += 1
+    return n, sost, heredoc, commenti
+
+
+def fine_senza_stato(s, i):
+    """La fine di una $( aperta prima di i, contando le parentesi e basta."""
+    aperte = 1
+    while i < len(s) and aperte:
+        aperte += {"(": 1, ")": -1}.get(s[i], 0)
+        i += 1
+    return i
+
+
+def sostituzioni_senza_stato(s):
+    """Le sostituzioni in un testo dove le virgolette non contano: il corpo di un
+    heredoc, un commento. Un apostrofo li' non apre niente."""
+    trovate, i = [], 0
+    while i < len(s):
+        if s[i] == "$" and s[i + 1:i + 2] == "(":
+            j = fine_senza_stato(s, i + 2)
+            trovate.append(s[i + 2:j - 1] if s[j - 1:j] == ")" else s[i + 2:j])
+            i = j
+        elif s[i] == "`":
+            j = s.find("`", i + 1)
+            j = len(s) if j < 0 else j
+            trovate.append(s[i + 1:j])
+            i = j + 1
+        else:
+            i += 1
     return trovate
 
 
+def riga_di_testo(riga, livello):
+    """ELENCO CHIUSO: la riga che apre un heredoc quotato ne fa un testo solo se e'
+    un comando solo e il comando e' gh, git, tee, o cat con redirezione su file
+    (dentro una $(...), anche cat da solo). Tutto il resto resta scandito."""
+    if "`" in riga or "$(" in riga:
+        return False
+    try:
+        lex = shlex.shlex(riga, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        p = list(lex)
+    except ValueError:
+        return False
+    if not p or any(t and set(t) <= set(";|&()") for t in p):
+        return False
+    if p[0] in ("gh", "git", "tee"):
+        return True
+    if p[0] == "cat":
+        resto, scrive = p[1:], False
+        while len(resto) >= 2 and resto[0] in ("<<", ">", ">>"):
+            scrive = scrive or resto[0] != "<<"
+            resto = resto[2:]
+        return not resto and (scrive or livello > 0)
+    return False
+
+
+def analizza_shell(cmd, livello):
+    """(testo, sostituzioni): il comando senza i corpi di heredoc che sono testo, e
+    il contenuto di ogni sostituzione di comando da scandire a sua volta."""
+    _, sost, heredoc, commenti = percorri(cmd)
+    tolti = []
+    for h in heredoc:
+        a, b = h["corpo"]
+        stessa_riga = [x for x in heredoc if x["riga"] == h["riga"]]
+        if all(x["quotato"] for x in stessa_riga) and riga_di_testo(cmd[h["riga"][0]:h["riga"][1]], livello):
+            tolti.append((a, b))
+        else:
+            sost += sostituzioni_senza_stato(cmd[a:b])
+    for a, b in commenti:
+        sost += sostituzioni_senza_stato(cmd[a:b])
+    testo, da = "", 0
+    for a, b in sorted(tolti):
+        testo, da = testo + cmd[da:a], b
+    return testo + cmd[da:], sost
+
+
 def livelli_2_3(cmd, project, voci_deny, home, livello=0):
-    testo = senza_heredoc_quotati(cmd)
+    testo, dentro_tutte = analizza_shell(cmd, livello)
 
     # Tokenizzazione, prima di tutto il resto: i livelli 2 e 3 lavorano sugli
     # ARGOMENTI, non sul comando come stringa.
@@ -239,7 +374,7 @@ def livelli_2_3(cmd, project, voci_deny, home, livello=0):
     # Le sostituzioni di comando si eseguono anche dentro una stringa fra virgolette
     # doppie o un argomento di testo: il loro contenuto e' un comando.
     if livello < 4:
-        for dentro in sostituzioni(testo):
+        for dentro in dentro_tutte:
             livelli_2_3(dentro, project, voci_deny, home, livello + 1)
 
 

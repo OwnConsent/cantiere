@@ -159,12 +159,90 @@ perimetro_prova 'heredoc quotato con una risalita: livello 4' "gh pr create --ti
 il caso cat ../cmp/.env
 EOF" deny
 
+echo; echo "Heredoc quotati: elenco chiuso di chi li riceve (review della #18)"
+# Si toglie il corpo solo per gh, git, tee e cat con redirezione su file, da soli
+# sulla riga. Ogni altro comando lo esegue o lo usa come percorsi: resta scandito.
+perimetro_prova "git commit -F - <<'EOF' che cita un percorso"  "git commit -F - <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" pass
+perimetro_prova "tee file <<'EOF' che cita un percorso"       "tee nota.md <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" pass
+perimetro_prova "source /dev/stdin <<'EOF'"                   "source /dev/stdin <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "xargs cat <<'EOF'"                           "xargs cat <<'EOF'
+$HOME/fuori.txt
+EOF" deny
+perimetro_prova "while read ...; done <<'EOF'"                "while read f; do cat \"\$f\"; done <<'EOF'
+$HOME/fuori.txt
+EOF" deny
+perimetro_prova "uv run - <<'EOF'"                            "uv run - <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "php <<'EOF'"                                 "php <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "bash<<'EOF' senza spazio"                    "bash<<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "\"bash\" <<'EOF' fra virgolette"             "\"bash\" <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "gh ... <<'EOF' con una pipe sulla riga"      "gh pr create --title t -F - <<'EOF' | tee log
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" deny
+perimetro_prova "cat <<'EOF' da solo, fuori da una \$(...)"    "cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" deny
+perimetro_prova "<<'X' dentro una stringa non e' un heredoc"  "echo \"<<'X'\"
+cat $HOME/fuori.txt
+X" deny
+perimetro_prova "<<'X' dentro un commento non e' un heredoc"  "true # <<'X'
+cat $HOME/fuori.txt
+X" deny
+
+# con un comando dell'elenco il corpo si toglierebbe: qui << non apre niente
+perimetro_prova "gh --body \"... <<'X'\": stringa, non heredoc"  "gh pr comment 1 --body \"usa <<'X' cosi\"
+cat $HOME/fuori.txt
+X" deny
+perimetro_prova "git status # <<'X': commento, non heredoc"   "git status # <<'X'
+cat $HOME/fuori.txt
+X" deny
+
+# Livello 2, eseguito a parte: un'area in .cantiere-deny non si legge passando il
+# percorso nel corpo di un heredoc quotato. Il progetto di prova sta sotto /tmp, dove
+# il livello 3 non nega niente: il diniego viene solo dall'elenco.
+TD=$(mktemp -d); printf 'site/riservato\n' > "$TD/.cantiere-deny"
+deny_prova() { # etichetta, comando, atteso: deny-elenco | pass
+  local out rc esito
+  out=$(python3 -c 'import sys,json;print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$2" \
+        | CLAUDE_PROJECT_DIR="$TD" "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
+  esito=pass
+  [ "$rc" -eq 2 ] && case "$out" in *"riferimento a 'site/riservato'"*) esito=deny-elenco ;; *) esito=deny-altro ;; esac
+  if [ "$esito" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1)); fi
+}
+deny_prova ".cantiere-deny: xargs cat <<'EOF' con l'area"     "xargs cat <<'EOF'
+site/riservato/x
+EOF" deny-elenco
+deny_prova ".cantiere-deny: gh ... <<'EOF' che la cita"       "gh pr create --title t -F - <<'EOF'
+il lotto non legge site/riservato/x
+EOF" pass
+rm -rf "$TD"
+
 echo; echo "Sostituzioni di comando: dentro le virgolette doppie si eseguono (02/10)"
 perimetro_prova '--body "$(cat /fuori)"'                      "gh pr create --title t --body \"\$(cat $HOME/fuori.txt)\"" deny
 perimetro_prova '--body "... `cat /fuori` ..."'               "gh pr create --title t --body \"prima \`cat $HOME/fuori.txt\` dopo\"" deny
 perimetro_prova '--body="$(cat /fuori) ..."'                  "gh pr create --title t --body=\"\$(cat $HOME/fuori.txt) x\"" deny
 perimetro_prova 'sostituzione dentro una sostituzione'        "echo \"\$(echo \"\$(cat $HOME/fuori.txt)\")\"" deny
 perimetro_prova "un apostrofo fra le doppie non la nasconde"   "gh pr create --title t --body \"l'hook legge \$(cat $HOME/fuori.txt) e basta\"" deny
+perimetro_prova "heredoc non quotato: l'apostrofo non la nasconde" "gh pr create --title t -F - <<EOF
+l'hook legge \$(cat $HOME/fuori.txt) e l'altro
+EOF" deny
+perimetro_prova "apostrofo in un commento, poi una sostituzione" "echo ciao # non c'e
+echo \"x \$(cat $HOME/fuori.txt) y\"" deny
+perimetro_prova "una ) fra apici non chiude la sostituzione"  "echo \"\$(echo ')'; cat $HOME/fuori.txt)\"" deny
 perimetro_prova '--body "$(cat dentro/il/progetto)"'          'gh pr create --title t --body "$(cat docs/x.md)"' pass
 perimetro_prova '--body "testo con /percorso/fuori"'          "gh pr create --title t --body \"testo con $HOME/fuori.txt dentro\"" pass
 perimetro_prova "fra apici singoli non si esegue"             "git commit -m 'la forma \$(cat $HOME/fuori.txt) passava'" pass
