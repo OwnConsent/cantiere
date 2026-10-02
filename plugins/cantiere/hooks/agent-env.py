@@ -4,7 +4,7 @@
 Il payload di PreToolUse porta `agent_type` quando la chiamata viene da un
 subagente, e non lo porta quando viene dal filo principale. Qui lo si legge e
 si antepone al comando `readonly CANTIERE_AGENT=<ruolo>; export CANTIERE_AGENT;`
-(fino al 02/10 un semplice export, e solo sui comandi git): la variabile viaggia
+(fino al 02/10 un semplice export): la variabile viaggia
 con il processo, qualunque sia la cartella in cui il comando va a finire, e
 githooks/prepare-commit-msg la legge.
 
@@ -18,9 +18,9 @@ Tre vincoli, tutti documentati:
   passa per la valutazione normale dei permessi, niente viene approvato in piu';
 - deve essere l'UNICO hook che riscrive l'input di Bash: con due, vince l'ultimo
   a finire e l'ordine non e' deterministico;
-- si riscrive OGNI comando Bash (dal 02/10; prima solo quelli che nominavano git):
-  un commit puo' nascere da uno script, da `npm version`, da `make release`, e
-  senza la variabile il git hook lo negava.
+- si riscrive solo se il comando nomina git. Il 02/10 si era provato a riscrivere
+  OGNI comando Bash, per firmare anche i commit che nascono da uno script, da
+  `npm version` o da `make release`: la prova dei permessi qui sotto l'ha escluso.
 
 Fuori da Claude Code la variabile non esiste, quindi un commit fatto a mano da
 una persona resta senza firma — ed e' giusto cosi'.
@@ -93,7 +93,34 @@ il valore, non il readonly) e, dalla quarta review, una shell che legge da stdin
 stringhe fra virgolette, su -m/-F come prosa, su unset e sull'assegnazione
 nella stessa shell.
 
-Limiti noti: uno script che assegna la variabile e committa (il confine qui
+02/10 — PROVA DEI PERMESSI. Il comando riscritto passa per la valutazione dei
+permessi, e la regola e': «The recognized command separators are &&, ||, ;, |,
+|&, & and newlines. A rule must match each subcommand independently»
+(code.claude.com/docs/en/permissions). Il prefisso aggiunge due sottocomandi.
+Misurato con `claude -p` 2.1.287 e --allowedTools "Bash(npm test:*)":
+- senza plugin `git status` e' eseguito; col plugin (di main o del ramo) e'
+  rifiutato, perche' il prefisso e `git status` chiedono approvazione: il
+  prefisso costa gia' un'approvazione su ogni comando git;
+- col prefisso su ogni comando, `npm test` (ammesso dalla regola) e `ls`
+  (di sola lettura, da solo non chiede niente) erano rifiutati;
+- aggiungendo le regole Bash(readonly CANTIERE_AGENT=*) e
+  Bash(export CANTIERE_AGENT) il prefisso e' ammesso e `npm test` passa, ma
+  `ls` e `git status` restano rifiutati: dentro un comando composto un comando
+  di sola lettura perde l'approvazione automatica.
+Per questo l'iniezione resta sui soli comandi che nominano git (decisione di
+Andrea), e un commit lanciato da uno script che non nomina git arriva al git
+hook senza ruolo e viene negato.
+
+Quinta review, lasciate nei limiti (decisione di Andrea): il modello di minaccia
+e' l'errore, non la falsificazione deliberata, e una shell figlia costruita
+apposta e' falsificazione deliberata. Il rilevamento di env e `sh -c` intercetta
+le forme comuni e non si estende. Non viste: `bash -ce '...'` (-c non in ultima
+posizione), `bash -c "$(cat <<EOF ... EOF)"`, `env` con continuazione di riga
+(barra rovesciata e a capo), `bash <(...)`, `... | env bash`. Falso diniego: `... | bash x.sh` quando
+il comando nomina la variabile.
+
+Limiti noti: uno script che non nomina git e committa (negato dal git hook,
+niente firma); uno script che assegna la variabile e committa (il confine qui
 sopra); `eval` o un altro interprete (python, perl) che lancia env o una shell;
 una shell diversa da bash non e' stata misurata. Due falsi dinieghi noti e
 lasciati: `bash -c 'git commit -m "... CANTIERE_AGENT=x ..."'` (il messaggio
@@ -207,6 +234,11 @@ def main():
               f"il lavoro a chi ti ha lanciato: committa un ruolo di cantiere.",
               file=sys.stderr)
         sys.exit(2)
+
+    # Si riscrive solo se il comando nomina git: il prefisso costa permessi (vedi
+    # «prova dei permessi» in testa al file), e sugli altri comandi li rompeva.
+    if not re.search(r"\bgit\b", cmd):
+        sys.exit(0)
 
     # readonly: nella stessa shell la variabile non si riassegna, non si toglie e
     # non si ridichiara (misure in testa al file)

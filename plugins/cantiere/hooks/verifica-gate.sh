@@ -305,7 +305,7 @@ m=re.match(r"readonly CANTIERE_AGENT=(\S+); export CANTIERE_AGENT; ",c); print(m
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$4" "$esito"; KO=$((KO+1)); fi
 }
 
-echo; echo "Primo strato — agent-env.py: il ruolo viene dal payload, su ogni comando Bash"
+echo; echo "Primo strato — agent-env.py: il ruolo viene dal payload, su ogni comando che nomina git"
 agente_prova 'filo principale: git commit -m'          ''                 'git commit -m "x"'                    orchestrator
 agente_prova 'subagente di cantiere: git commit -m'    'cantiere:qa-test' 'git commit -m "x"'                    qa-test
 agente_prova 'git -C <dir> commit'                     'cantiere:devops'  'git -C /percorso commit -m x'         devops
@@ -316,10 +316,12 @@ EOF"                                                                            
 agente_prova 'bash -c "git commit"'                    ''                 'bash -c "git commit -m x"'            orchestrator
 agente_prova 'git merge --no-ff'                       'cantiere:qa-test' 'git merge --no-ff origin/x'           qa-test
 agente_prova 'ruolo esplicito uguale al payload'       ''                 'CANTIERE_AGENT=orchestrator git commit -m x' orchestrator
-agente_prova 'script che non nomina git'               'cantiere:devops'  './scripts/x.sh'                       devops
-agente_prova 'npm version (committa senza nominare git)' ''               'npm version patch'                    orchestrator
-agente_prova 'make release'                            'cantiere:devops'  'make release'                         devops
-agente_prova 'agente fuori elenco, comando qualunque'  'Explore'          'ls -la'                               Explore
+# niente prefisso sui comandi che non nominano git: costerebbe un'approvazione a
+# ogni comando (prova dei permessi del 02/10)
+agente_prova 'script che non nomina git: niente prefisso' 'cantiere:devops' './scripts/x.sh'                     niente
+agente_prova 'npm test: niente prefisso'               ''                 'npm test'                             niente
+agente_prova 'ls: niente prefisso'                     'Explore'          'ls -la'                               niente
+agente_prova 'make release: niente prefisso'           'cantiere:devops'  'make release'                         niente
 agente_prova 'il messaggio cita la variabile'          ''                 'git commit -m "fix: CANTIERE_AGENT= vuota"' orchestrator
 agente_prova 'heredoc che cita la variabile'           ''                 "git commit -F - <<'EOF'
 prima era CANTIERE_AGENT=qa-test a mano
@@ -340,7 +342,7 @@ agente_prova 'bash <<EOF con assegnazione nel corpo'     'cantiere:qa-test' "bas
 CANTIERE_AGENT=orchestrator git commit -m x
 EOF"                                                                                                              deny
 agente_prova 'echo ... | bash con assegnazione'        'cantiere:qa-test' "echo 'CANTIERE_AGENT=orchestrator git commit -m x' | bash" deny
-agente_prova 'echo ciao | bash: ammesso'               'cantiere:qa-test' 'echo ciao | bash'                     qa-test
+agente_prova 'echo ciao | bash: ammesso'               'cantiere:qa-test' 'echo ciao | bash'                     niente
 agente_prova 'bash <<EOF senza la variabile: ammesso'  'cantiere:qa-test' "bash <<'EOF'
 git status
 EOF"                                                                                                              qa-test
@@ -366,10 +368,13 @@ shell_prova() { # etichetta, forma (GC = il commit), atteso: <ruolo> | nessun-co
     && printf '#!/bin/bash\ngit commit -qm t\n' > "$T/pulito.sh" && chmod +x "$T/s.sh" "$T/pulito.sh" ) >/dev/null 2>&1
   prima=$(git -C "$T/r" rev-parse HEAD)
   cmd="cd '$T/r' && ${2//GC/git commit -qm t}"; cmd="${cmd//SCRIPT/$T}"
-  cmd=$(python3 -c 'import json,sys; print(json.dumps({"agent_type":"cantiere:qa-test","tool_input":{"command":sys.argv[1]}}))' "$cmd" \
-        | "$H/agent-env.py" 2>/dev/null \
-        | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null)
-  if [ -z "$cmd" ]; then val=negato-primo
+  local orig="$cmd" primo uscita
+  uscita=$(python3 -c 'import json,sys; print(json.dumps({"agent_type":"cantiere:qa-test","tool_input":{"command":sys.argv[1]}}))' "$cmd" \
+        | "$H/agent-env.py" 2>/dev/null); primo=$?
+  cmd=$(printf '%s' "$uscita" | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null)
+  # uscita 0 senza riscrittura: il comando non nomina git e gira cosi' com'e'
+  [ "$primo" -eq 0 ] && [ -z "$cmd" ] && cmd="$orig"
+  if [ "$primo" -eq 2 ]; then val=negato-primo
   else
     env -u CANTIERE_AGENT CLAUDECODE=1 /bin/bash -c "$cmd" >/dev/null 2>&1
     if [ "$(git -C "$T/r" rev-parse HEAD)" = "$prima" ]; then val=nessun-commit
@@ -392,7 +397,7 @@ shell_prova 'CANTIERE_AGENT=x; git commit (si ferma)'    'CANTIERE_AGENT=orchest
 shell_prova 'in una sottoshell (si ferma)'               '(CANTIERE_AGENT=orchestrator; GC)'         nessun-commit
 shell_prova 'export -n: il git hook nega'                'export -n CANTIERE_AGENT; GC'              nessun-commit
 shell_prova 'CANTIERE_AGENT= vuota'                      'CANTIERE_AGENT= GC'                        qa-test
-shell_prova 'script che committa: firmato dal ruolo'     'SCRIPT/pulito.sh'                          qa-test
+shell_prova 'script che non nomina git: lo nega il git hook' 'SCRIPT/pulito.sh'                       nessun-commit
 shell_prova 'env CANTIERE_AGENT=x: negato prima'         'env CANTIERE_AGENT=orchestrator GC'        negato-primo
 shell_prova 'bash -c con assegnazione: negato prima'     "bash -c 'CANTIERE_AGENT=orchestrator GC'"  negato-primo
 shell_prova 'CONFINE: script che assegna e committa'     'SCRIPT/s.sh'                               orchestrator
@@ -578,6 +583,9 @@ inserisci_prova() { # etichetta, scenario, atteso
       amend-v)  GIT_EDITOR=true git commit -q --amend -v ;;
       umano)    git commit -qm 'feat: y' -m 'Co-Authored-By: Umano <u@e.invalid>' ;;
       crlf)     git commit -qm 'feat: y' ;;
+      ripiegato) git commit -qm 'feat: y' -m 'Reviewed-by: A <a@b.invalid>
+ su due righe
+Refs: x' ;;
       cancelletto) git commit -qm 'fix: x' -m 'Closes
 #123' ;;
       hashtag)  printf 'fix: x\n\ncorpo\n\n#hashtag\n' > ../m && git commit -q -F ../m ;;
@@ -593,6 +601,7 @@ inserisci_prova() { # etichetta, scenario, atteso
     rm -rf "$T"; return ;;
   esac
   val="firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' 2>/dev/null | grep . | tr '\n' ',')"
+  [ "$2" = ripiegato ] && val="$val refs:$(git -C "$T/r" log -1 --format='%(trailers:key=Refs,valueonly)' | grep -c '^x$')"
   [ "$2" = umano ] && val="$val umano:$(git -C "$T/r" log -1 --format='%(trailers:key=Co-Authored-By,valueonly)' | grep -c '^Umano ')"
   if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
@@ -603,6 +612,7 @@ inserisci_prova 'commit.verbose=true'                          verbose  'firma:q
 inserisci_prova 'commit.cleanup=scissors'                      scissors 'firma:qa-test,'
 inserisci_prova '--amend -v su un commit firmato devops'       amend-v  'firma:qa-test,'
 inserisci_prova 'il Co-Authored-By di una persona resta trailer' umano  'firma:qa-test, umano:1'
+inserisci_prova 'trailer ripiegato su due righe: resta trailer'  ripiegato 'firma:qa-test, refs:1'
 inserisci_prova 'githooks/ruoli con fine riga CRLF'            crlf     'firma:qa-test,'
 inserisci_prova '-m con una riga che comincia con #'            cancelletto 'firma:qa-test, cancelletto-prima-della-firma:si'
 inserisci_prova '-F con un #hashtag finale'                    hashtag     'firma:qa-test, cancelletto-prima-della-firma:si'

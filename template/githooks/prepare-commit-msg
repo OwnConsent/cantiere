@@ -117,6 +117,8 @@ fi
 #   pre-commit). `git interpret-trailers` non aiuta: tratta ogni riga # come
 #   commento e sposta «#123» sotto la firma (misurato). Limite: --cleanup dato
 #   sulla riga di comando l'hook non lo vede, legge solo commit.cleanup.
+# - Limite: messaggio vuoto con un editor che non scrive niente (GIT_EDITOR=true):
+#   l'oggetto del commit diventa la firma, e git non abortisce per messaggio vuoto.
 # Se python fallisce, in sessione il commit e' negato: meglio fermo che senza firma.
 SOSTITUISCI=0
 if [ "${CLAUDECODE:-}" = "1" ]; then
@@ -149,7 +151,13 @@ if sostituisci:
 corpo = testa[:inizio] + paragrafo
 while corpo and not corpo[-1].strip():
     corpo.pop()
-trailer = inizio > 0 and paragrafo and all(re.match(r"[A-Za-z0-9-]+: ?\S", r) for r in paragrafo)
+# e' un blocco di trailer se lo dice git: riconosce anche i trailer ripiegati su piu'
+# righe e «(cherry picked from commit ...)», che una regola scritta qui perdeva
+trailer = False
+if inizio > 0 and paragrafo:
+    visti = subprocess.run(["git", "interpret-trailers", "--parse"], capture_output=True,
+                           text=True, input="oggetto\n\n" + "\n".join(paragrafo) + "\n")
+    trailer = visti.returncode == 0 and bool(visti.stdout.strip())
 if not trailer:
     corpo.append("")
 if ultimo < 0:          # messaggio ancora vuoto (editor): riga 1 per il titolo, poi una vuota
