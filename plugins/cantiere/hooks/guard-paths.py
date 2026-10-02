@@ -21,6 +21,12 @@ interprete dimenticato e' diventato un'uscita: `source /dev/stdin <<'EOF'`,
 `xargs cat <<'EOF'`, `while read ...; done <<'EOF'`, `uv run - <<'EOF'`, `php`,
 `bash<<'EOF'` (review della #18, 02/10).
 
+FAIL-CLOSED. Un hook che va in eccezione esce con un codice che Claude Code tratta
+come errore non bloccante: il comando passa. Ogni errore del parser deve diventare
+un diniego. Misurato nella seconda review della #18: 1200 `$(` di fila mandavano
+percorri in RecursionError, l'hook usciva con 1 e i livelli 2, 3 e 4 non giravano.
+Ora la profondita' ha un limite, e main() trasforma in diniego ogni eccezione.
+
 02/10 — heredoc quotati e sostituzioni di comando (misurato passando i payload):
 - il corpo di un heredoc con delimitatore quotato (<<'EOF', <<"EOF", <<\EOF) e'
   testo, la shell non lo espande; shlex non conosce gli heredoc e lo spezzava in
@@ -33,7 +39,14 @@ interprete dimenticato e' diventato un'uscita: `source /dev/stdin <<'EOF'`,
   e le altre dell'elenco TESTO) di gh o di git, nella forma separata o
   --opzione="...". In ogni altra $(...) decide chi la consuma (`bash -c`, `eval`),
   e lasciarlo decidere sarebbe di nuovo un elenco aperto: li' il corpo resta
-  scandito.
+  scandito. Valgono anche `git commit -am "$(...)"` (opzioni corte in gruppo che
+  finiscono in m), la forma attaccata `-m"$(...)"` e `-m \` con il valore a capo;
+- l'elenco si fida del NOME del comando, quindi il corpo non si toglie se quel nome
+  puo' essere stato cambiato nello stesso comando: una definizione di funzione
+  (`gh() { bash; }`, `function`), un `alias`, o git con un'opzione globale diversa
+  da -C (`git -c alias.x=!bash x <<'EOF'`). Si guarda il comando senza i corpi degli
+  heredoc quotati e senza il contenuto delle sostituzioni, a ogni livello e in quelli
+  che lo contengono;
   Nessun'altra parte della riga ne cambia il destino: con una pipe, un `;`, un `&&`,
   una sostituzione o un altro comando sulla riga il corpo resta scandito, e cosi' in
   ogni caso fuori elenco, come prima;
@@ -55,7 +68,8 @@ CONFINE. Come agent-env.py, questo hook e' un parser parziale della shell e non
 sara' mai completo: un finding sul parser si corregge solo se apre un'uscita con
 un comando diretto o se blocca lavoro legittimo. Limiti noti:
 - un heredoc quotato che diventa codice piu' tardi: `cat <<'EOF' > x.sh` e poi
-  `bash x.sh`; un alias o un'estensione di git o di gh che lancia una shell;
+  `bash x.sh`; un alias gia' scritto nella configurazione di git o di gh, o una
+  loro estensione, che lancia una shell;
 - `bash -c "testo con /percorso/assoluto"` ed `eval "..."` SENZA sostituzione: il
   token ha spazi e non si scandisce, come un corpo di codice;
 - falsi dinieghi sui comandi fuori elenco: un heredoc quotato che cita un percorso
@@ -63,7 +77,8 @@ un comando diretto o se blocca lavoro legittimo. Limiti noti:
   un prefisso (`VAR=x gh ...`, `/usr/bin/gh`), se sulla riga c'e' una pipe, un
   altro comando o una sostituzione, o se l'heredoc sta in una $(...) non fra
   virgolette. E `$(cat <<'EOF' ...)` come valore di un'opzione che non e'
-  nell'elenco TESTO (-F vuole un file), o di gh/git dopo `then`, `do`, `{`;
+  nell'elenco TESTO (-F vuole un file), o di gh/git dopo `then`, `do`, `{`. E
+  quando nel comando compare `nome()`, `function` o `alias` anche solo in un titolo;
 - una risalita ../ citata in prosa resta negata dal livello 4, per scelta;
 - un percorso assoluto dentro un corpo di codice (`python3 -c "open('/x/y')"`): il
   token ha spazi e non c'e' risalita;
@@ -118,7 +133,10 @@ TESTO = {"-m", "--message", "--body", "-b", "--title", "-t", "--notes", "-d",
 FINE_PAROLA = " \t\n;|&<>()"
 
 
-def percorri(s, i=0, chiusa=False):
+PROFONDITA_MASSIMA = 40
+
+
+def percorri(s, i=0, chiusa=False, profondita=0):
     """Percorre un testo di shell da i, a un solo livello. Restituisce:
     (fine, sostituzioni, heredoc, commenti, a_capo).
     - sostituzioni: (inizio, fine, contenuto) di ogni $(...) e `...` che la shell
@@ -131,6 +149,8 @@ def percorri(s, i=0, chiusa=False):
     - a_capo: gli a capo fuori dalle virgolette, cioe' quelli che chiudono un comando.
     Con chiusa=True si ferma alla ) che chiude la $( gia' aperta: e' cosi' che le
     parentesi si contano rispettando virgolette e corpi di heredoc."""
+    if profondita > PROFONDITA_MASSIMA:
+        raise ValueError("troppe sostituzioni di comando annidate")
     n = len(s)
     sost, heredoc, commenti, attesi, a_capo = [], [], [], [], []
     doppio, aperte, riga = False, 0, i
@@ -146,7 +166,7 @@ def percorri(s, i=0, chiusa=False):
         if c == '"':
             doppio = not doppio
         elif c == "$" and s[i + 1:i + 2] == "(":
-            j = percorri(s, i + 2, True)[0]
+            j = percorri(s, i + 2, True, profondita + 1)[0]
             sost.append((i, j, s[i + 2:j - 1] if s[j - 1:j] == ")" else s[i + 2:j]))
             i = j
             continue
@@ -241,6 +261,30 @@ def sostituzioni_senza_stato(s):
     return trovate
 
 
+def parole(testo):
+    """Il testo spezzato in parole come fa la shell, o None se non si riesce. Una
+    barra rovesciata seguita da a capo continua la riga: si toglie prima."""
+    try:
+        lex = shlex.shlex(testo.replace("\\\n", ""), posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        return list(lex)
+    except ValueError:
+        return None
+
+
+def separa(t):
+    return bool(t) and set(t) <= set(";|&()")
+
+
+def git_senza_opzioni(resto):
+    """Le parole dopo `git`: ammessa solo l'opzione globale -C <cartella>. -c e
+    --config-env definiscono alias e comandi, --exec-path cambia cosa gira."""
+    while resto[:1] == ["-C"]:
+        resto = resto[2:]
+    return not resto[:1] or not resto[0].startswith("-")
+
+
 def riga_di_testo(riga, valore_di_testo):
     """ELENCO CHIUSO: la riga che apre un heredoc quotato ne fa un testo solo se e'
     un comando solo e il comando e' gh, git, tee, o cat con redirezione su file.
@@ -248,17 +292,13 @@ def riga_di_testo(riga, valore_di_testo):
     di gh o git (valore_di_testo). Tutto il resto resta scandito."""
     if "`" in riga or "$(" in riga:
         return False
-    try:
-        lex = shlex.shlex(riga, posix=True, punctuation_chars=True)
-        lex.whitespace_split = True
-        lex.commenters = ""
-        p = list(lex)
-    except ValueError:
+    p = parole(riga)
+    if not p or any(separa(t) for t in p):
         return False
-    if not p or any(t and set(t) <= set(";|&()") for t in p):
-        return False
-    if p[0] in ("gh", "git", "tee"):
+    if p[0] in ("gh", "tee"):
         return True
+    if p[0] == "git":
+        return git_senza_opzioni(p[1:])
     if p[0] == "cat":
         resto, scrive = p[1:], False
         while len(resto) >= 2 and resto[0] in ("<<", ">", ">>"):
@@ -269,73 +309,86 @@ def riga_di_testo(riga, valore_di_testo):
 
 
 SEGNO = "__CANTIERE_SOST_%d__"
+CORTE_DI_TESTO = tuple(o for o in TESTO if not o.startswith("--"))
+DEFINISCE = re.compile(r"[\w.-]+\s*\(\s*\)|\bfunction\b|\balias\b")
 
 
-def valori_di_testo(cmd, sost, heredoc, a_capo):
+def senza(cmd, pezzi, a=0, b=None):
+    """cmd[a:b] con ogni pezzo (inizio, fine, sostituto) rimpiazzato."""
+    b = len(cmd) if b is None else b
+    fuori, da = "", a
+    for x, y, con in sorted(pezzi):
+        if x < da or y > b:
+            continue
+        fuori, da = fuori + cmd[da:x] + con, y
+    return fuori + cmd[da:b]
+
+
+def valori_di_testo(cmd, sost, heredoc, commenti, a_capo):
     """Gli indici delle sostituzioni che sono il valore di un'opzione di testo di gh
-    o di git: `gh ... --body "$(...)"`, `git commit -m "$(...)"`, --body="$(...)".
-    Si mette un segnaposto al posto di ogni sostituzione, si spezza in parole, e si
+    o di git: `gh ... --body "$(...)"`, `git commit -m "$(...)"`, --body="$(...)",
+    `git commit -am "$(...)"`, -m"$(...)". Si mette un segnaposto al posto di ogni
+    sostituzione, si tolgono commenti e corpi di heredoc, si spezza in parole, e si
     guarda il comando che contiene il segnaposto. Nel dubbio, nessuna."""
     if "__CANTIERE_SOST_" in cmd:
         return set()
     pezzi = [(a, b, SEGNO % k) for k, (a, b, _) in enumerate(sost)]
     pezzi += [(h["corpo"][0], h["corpo"][1], "") for h in heredoc]
+    pezzi += [(a, b, "") for a, b in commenti]
     pezzi += [(a, a + 1, " ; ") for a in a_capo]
-    mascherato, da = "", 0
-    for a, b, con in sorted(pezzi):
-        if a < da:                       # un a capo dentro un corpo gia' tolto
-            continue
-        mascherato, da = mascherato + cmd[da:a] + con, b
-    mascherato += cmd[da:]
-    try:
-        lex = shlex.shlex(mascherato, posix=True, punctuation_chars=True)
-        lex.whitespace_split = True
-        lex.commenters = ""
-        p = list(lex)
-    except ValueError:
+    p = parole(senza(cmd, pezzi))
+    if p is None:
         return set()
-    separa = lambda t: bool(t) and set(t) <= set(";|&()")
     trovati = set()
     for k in range(len(sost)):
-        dove = [n for n, t in enumerate(p) if SEGNO % k in t]
+        segno = SEGNO % k
+        dove = [n for n, t in enumerate(p) if segno in t]
         if len(dove) != 1:
             continue
         n = inizio = dove[0]
         while inizio > 0 and not separa(p[inizio - 1]):
             inizio -= 1
-        if p[inizio] not in ("gh", "git"):
+        git = p[inizio] == "git"
+        if p[inizio] != "gh" and not (git and git_senza_opzioni(p[inizio + 1:n])):
             continue
-        if (n > inizio + 1 and p[n - 1] in TESTO) or \
-           (p[n].startswith("--") and p[n].split("=", 1)[0] in TESTO):
+        prima = p[n - 1] if n > inizio + 1 else ""
+        attaccata = p[n].startswith(tuple(o + segno for o in CORTE_DI_TESTO)) or bool(git and re.match(r"-[A-Za-z]*m" + segno, p[n]))
+        if prima in TESTO \
+           or (p[n].startswith("--") and p[n].split("=", 1)[0] in TESTO) \
+           or (git and re.fullmatch(r"-[A-Za-z]*m", prima)) \
+           or attaccata:
             trovati.add(k)
     return trovati
 
 
-def analizza_shell(cmd, valore_di_testo):
-    """(testo, sostituzioni): il comando senza i corpi di heredoc che sono testo, e
-    per ogni sostituzione di comando il contenuto da scandire a sua volta, con il
-    suo contesto: se e' il valore di un'opzione di testo di gh o git."""
+def analizza_shell(cmd, valore_di_testo, definito):
+    """(testo, sostituzioni, definito): il comando senza i corpi di heredoc che sono
+    testo; per ogni sostituzione di comando il contenuto da scandire a sua volta, con
+    il suo contesto (se e' il valore di un'opzione di testo di gh o git); e se qui, o
+    in un livello che contiene questo, un nome di comando puo' essere stato
+    ridefinito: allora nessun corpo si toglie."""
     _, sost, heredoc, commenti, a_capo = percorri(cmd)
-    di_testo = valori_di_testo(cmd, sost, heredoc, a_capo)
+    quotati = [(h["corpo"][0], h["corpo"][1], "") for h in heredoc if h["quotato"]]
+    definito = definito or bool(DEFINISCE.search(
+        senza(cmd, [(a, b, " ") for a, b, _ in sost] + quotati)))
+    di_testo = set() if definito else valori_di_testo(cmd, sost, heredoc, commenti, a_capo)
     dentro = [(contenuto, k in di_testo) for k, (_, _, contenuto) in enumerate(sost)]
     tolti = []
     for h in heredoc:
         a, b = h["corpo"]
         stessa_riga = [x for x in heredoc if x["riga"] == h["riga"]]
-        if all(x["quotato"] for x in stessa_riga) and riga_di_testo(cmd[h["riga"][0]:h["riga"][1]], valore_di_testo):
-            tolti.append((a, b))
+        riga = senza(cmd, [(x, y, "") for x, y in commenti], *h["riga"])
+        if not definito and all(x["quotato"] for x in stessa_riga) and riga_di_testo(riga, valore_di_testo):
+            tolti.append((a, b, ""))
         else:
             dentro += [(x, False) for x in sostituzioni_senza_stato(cmd[a:b])]
     for a, b in commenti:
         dentro += [(x, False) for x in sostituzioni_senza_stato(cmd[a:b])]
-    testo, da = "", 0
-    for a, b in sorted(tolti):
-        testo, da = testo + cmd[da:a], b
-    return testo + cmd[da:], dentro
+    return senza(cmd, tolti), dentro, definito
 
 
-def livelli_2_3(cmd, project, voci_deny, home, livello=0, valore_di_testo=False):
-    testo, dentro_tutte = analizza_shell(cmd, valore_di_testo)
+def livelli_2_3(cmd, project, voci_deny, home, livello=0, valore_di_testo=False, definito=False):
+    testo, dentro_tutte, definito = analizza_shell(cmd, valore_di_testo, definito)
 
     # Tokenizzazione, prima di tutto il resto: i livelli 2 e 3 lavorano sugli
     # ARGOMENTI, non sul comando come stringa.
@@ -429,16 +482,14 @@ def livelli_2_3(cmd, project, voci_deny, home, livello=0, valore_di_testo=False)
 
     # Le sostituzioni di comando si eseguono anche dentro una stringa fra virgolette
     # doppie o un argomento di testo: il loro contenuto e' un comando.
-    if livello < 4:
-        for dentro, di_testo in dentro_tutte:
-            livelli_2_3(dentro, project, voci_deny, home, livello + 1, di_testo)
+    if dentro_tutte and livello >= 8:
+        deny("troppe sostituzioni di comando annidate: non le esamino tutte")
+    for dentro, di_testo in dentro_tutte:
+        livelli_2_3(dentro, project, voci_deny, home, livello + 1, di_testo, definito)
 
 
-def main():
-    try:
-        cmd = json.load(sys.stdin).get("tool_input", {}).get("command", "")
-    except Exception:
-        sys.exit(0)
+def esamina(dati):
+    cmd = dati.get("tool_input", {}).get("command", "")
     if not cmd.strip():
         sys.exit(0)
 
@@ -473,6 +524,19 @@ def main():
             deny(f"la risalita '{risalita}' porta fuori dal progetto ({risolto})")
 
     sys.exit(0)
+
+
+def main():
+    try:
+        dati = json.load(sys.stdin)
+    except Exception:
+        sys.exit(0)
+    # FAIL-CLOSED: un'eccezione qui farebbe uscire l'hook con 1, che per Claude Code
+    # e' un errore non bloccante. deny() e sys.exit() sollevano SystemExit e passano.
+    try:
+        esamina(dati)
+    except Exception as e:
+        deny(f"errore del parser ({type(e).__name__}: {e}): comando non esaminato, quindi negato")
 
 
 if __name__ == "__main__":

@@ -242,6 +242,56 @@ cat $HOME/fuori.txt
 EOF
 )\\\"\"" deny
 
+# seconda review della #18: le forme comuni di commit, e un commento con un apostrofo
+perimetro_prova "git commit -am \"\$(cat <<'EOF' ...)\""       "git commit -am \"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "git commit -m\"\$(cat <<'EOF' ...)\" attaccata" "git commit -m\"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "git commit -m \\ e il valore a capo"          "git commit -m \\
+  \"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "# don't forget sulla riga prima"             "# don't forget
+git commit -m \"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "git -C dir commit -F - <<'EOF'"              "git -C site commit -F - <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" pass
+# l'elenco si fida del nome: se il nome puo' essere stato ridefinito, niente si toglie
+perimetro_prova "gh() { bash; } e poi gh <<'EOF'"             "gh() { bash; }
+gh <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "function gh { bash; }; gh <<'EOF'"           "function gh { bash; }
+gh <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "alias gh=bash e poi gh <<'EOF'"              "alias gh=bash
+gh <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "git -c 'alias.x=!bash' x <<'EOF'"            "git -c 'alias.x=!bash' x <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "git --exec-path=... commit -F - <<'EOF'"     "git --exec-path=bin commit -F - <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "gh() {...}; gh -m \"\$(cat <<'EOF' ...)\""    "gh() { bash -c \"\$2\"; }; gh -m \"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "git -c ... -m \"\$(cat <<'EOF' ...)\""        "git -c 'alias.x=!f() { bash -c \"\$2\"; }; f' x -m \"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\"" deny
+
 # con un comando dell'elenco il corpo si toglierebbe: qui << non apre niente
 perimetro_prova "gh --body \"... <<'X'\": stringa, non heredoc"  "gh pr comment 1 --body \"usa <<'X' cosi\"
 cat $HOME/fuori.txt
@@ -290,6 +340,21 @@ perimetro_prova "--body \"\$(cat <<'EOF' ...)\" con un percorso" "gh pr create -
 il collaudo gira in $HOME/fuori.txt e basta
 EOF
 )\"" pass
+
+echo; echo "Fail-closed: se il parser si rompe, il comando e' negato (seconda review della #18)"
+# Un hook che esce con 1 e' un errore non bloccante: il comando passerebbe.
+perimetro_prova '1200 $( di fila: negato, non in errore'     "cat $HOME/fuori.txt $(printf '$(%.0s' $(seq 1200))" deny
+perimetro_prova '1200 $( di fila, senza altro'               "echo $(printf '$(%.0s' $(seq 1200))" deny
+out=$(python3 -c 'import json;print(json.dumps({"tool_input":{"command":"echo "+"$("*1200}}))' | "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
+case "$rc:$out" in
+  2:*"troppe sostituzioni di comando annidate"*) printf "  ${V}ok${N}    %-52s %s\n" "1200 \$(: il diniego dice il motivo" "testo presente"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s uscita %s\n" "1200 \$(: il diniego dice il motivo" "$rc"; KO=$((KO+1)) ;;
+esac
+out=$(printf '{"tool_input":{"command":123}}' | "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
+case "$rc:$out" in
+  2:*"errore del parser"*) printf "  ${V}ok${N}    %-52s %s\n" "eccezione qualsiasi (comando non stringa): negato" "deny"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s uscita %s\n" "eccezione qualsiasi (comando non stringa): negato" "$rc"; KO=$((KO+1)) ;;
+esac
 
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass
