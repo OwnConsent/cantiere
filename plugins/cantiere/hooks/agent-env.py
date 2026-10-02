@@ -3,7 +3,8 @@
 
 Il payload di PreToolUse porta `agent_type` quando la chiamata viene da un
 subagente, e non lo porta quando viene dal filo principale. Qui lo si legge e
-si antepone al comando `export CANTIERE_AGENT=<ruolo>;`: la variabile viaggia
+si antepone al comando `readonly CANTIERE_AGENT=<ruolo>; export CANTIERE_AGENT;`
+(fino al 02/10 un semplice export, e solo sui comandi git): la variabile viaggia
 con il processo, qualunque sia la cartella in cui il comando va a finire, e
 githooks/prepare-commit-msg la legge.
 
@@ -17,7 +18,9 @@ Tre vincoli, tutti documentati:
   passa per la valutazione normale dei permessi, niente viene approvato in piu';
 - deve essere l'UNICO hook che riscrive l'input di Bash: con due, vince l'ultimo
   a finire e l'ordine non e' deterministico;
-- si riscrive solo se il comando nomina git: nessun motivo di toccare il resto.
+- si riscrive OGNI comando Bash (dal 02/10; prima solo quelli che nominavano git):
+  un commit puo' nascere da uno script, da `npm version`, da `make release`, e
+  senza la variabile il git hook lo negava.
 
 Fuori da Claude Code la variabile non esiste, quindi un commit fatto a mano da
 una persona resta senza firma — ed e' giusto cosi'.
@@ -71,21 +74,33 @@ Regola per le review: un finding sul parser si corregge solo se apre una
 falsificazione con un comando diretto o se blocca lavoro legittimo. Il resto va
 nei limiti noti.
 
-Limiti noti: uno script che lancia git senza nominarlo nel comando non viene
-riscritto; un'assegnazione dentro un heredoc dato in pasto a una shell, dentro
-`eval "..."` o in una stringa quotata che non sia `sh -c` non viene vista; un
-verbo fra virgolette (`git "commit"`) da un agente non di cantiere non e' negato
-qui ma dal git hook. `CANTIERE_AGENT=x git status` e' negato anche se non firma
-niente. E questo hook esiste solo se il plugin e' attivo nella sessione.
+02/10 — terza review: la variabile diventa NON RIASSEGNABILE. Riconoscere la
+manomissione nel testo del comando continuava a perdere forme
+(`ls -m;CANTIERE_AGENT=x git commit`, `export "CANTIERE_AGENT=x"`). Ora il
+prefisso e' `readonly ...; export ...`. Misurato in /bin/bash 5.2.21, la shell
+del Bash tool (`/bin/bash -c "source <snapshot> && ... eval ..."`, non posix):
+- `CANTIERE_AGENT=x git commit`, `export CANTIERE_AGENT=x`, `export "..."`,
+  `declare`, `local`, `unset`, `eval "..."`, `readonly` di nuovo: errore
+  «readonly variable», e il git hook vede comunque il ruolo vero;
+- `CANTIERE_AGENT=x; git commit` e `(CANTIERE_AGENT=x; ...)`: la shell si ferma
+  con uscita 1, nessun commit;
+- `export -n CANTIERE_AGENT`: il git hook non vede la variabile e nega.
+Fuori dalla stessa shell il readonly non vale, e sono le sole forme che questo
+hook cerca ancora nel testo e nega: `env CANTIERE_AGENT=x`, `env -u`, e
+`bash -c` / `sh -c` con un'assegnazione nella stringa (la shell figlia eredita
+il valore, non il readonly). Tolte perche' non servono piu': le regole sulle
+stringhe fra virgolette, su -m/-F come prosa, su unset e sull'assegnazione
+nella stessa shell.
+
+Limiti noti: uno script che assegna la variabile e committa (il confine qui
+sopra); `eval` o un altro interprete (python, perl) che lancia env o una shell;
+una shell diversa da bash non e' stata misurata. E questo hook esiste solo se il
+plugin e' attivo nella sessione.
 """
-import json, os, re, sys
+import json, os, re, shlex, sys
 
 VAR = "CANTIERE_AGENT"
-# git, eventuali opzioni globali (-C dir, -c k=v, --no-pager, ...), poi il verbo.
-# Niente trattino dopo: merge-base, merge-tree, commit-graph, commit-tree leggono.
-CREA_COMMIT = re.compile(
-    r"\bgit\b(?:\s+(?:-[Cc]\s+\S+|--?[A-Za-z][\w-]*(?:=\S+)?))*\s+(commit|merge)(?![\w-])")
-QUOTATO = r"""("(?:\\.|[^"\\])*"|'[^']*')"""
+SHELL = {"sh", "bash", "zsh", "dash", "ksh"}
 
 def ruoli_validi():
     d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agents")
@@ -94,43 +109,57 @@ def ruoli_validi():
     except OSError:
         return set()
 
-def eseguito(cmd):
-    """Quello che la shell esegue davvero, tolto il testo: corpi di heredoc,
-    stringhe fra virgolette (ridotte a un segnaposto Q), messaggi di commit.
-    E' un parser parziale: vedi il confine nel commento in testa."""
-    # del heredoc si toglie solo il CORPO: il resto della riga di apertura la shell
-    # lo esegue (`cat <<EOF | CANTIERE_AGENT=x git commit -F -`), e va guardato
+def parole(cmd):
+    """Il comando spezzato come lo spezza la shell: una stringa fra virgolette e'
+    una parola sola, `;`, `&&`, `|` sono parole a se'. Il corpo di un heredoc e'
+    testo e si toglie; la riga che lo apre si esegue e resta."""
     cmd = re.sub(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?\n\s*\3\b", r"\1", cmd, flags=re.S)
-    # `bash -c "..."` e' un comando diretto: la stringa si apre e si guarda dentro
-    cmd = re.sub(r"\b(?:ba|z|da)?sh\s+(?:-\w+\s+)*-\w*c\s+" + QUOTATO,
-                 lambda m: " ; " + m.group(1)[1:-1].replace('\\"', '"') + " ; ", cmd)
-    cmd = re.sub(QUOTATO, "Q", cmd)
-    # -m, -am, -F, --message, --file, --body, --title: quello che segue e' prosa
-    cmd = re.sub(r"(?<=\s)(?:-[A-Za-z]*[mF]|--message|--file|--body|--title)(?:=\S*|\s+\S+|\S+)",
-                 " ", cmd)
-    return cmd
+    cmd = cmd.replace("\n", " ; ")
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        return list(lex)
+    except ValueError:            # virgolette non chiuse: si spezza sugli spazi
+        return cmd.split()
 
-def manomissione(testo, ruolo):
-    """Restituisce il motivo se il comando svuota, toglie o forza la variabile."""
-    if re.search(r"\bunset\s+(?:-\w+\s+)*" + VAR + r"\b", testo):
-        return f"il comando toglie {VAR} con unset"
-    if re.search(r"(?:-u\s*|--unset[=\s]\s*)" + VAR + r"\b", testo):
-        return f"il comando toglie {VAR} con env -u"
-    for m in re.finditer(r"(?<![\w$])" + VAR + r"=([^\s;&|)]*)", testo):
-        valore = m.group(1)
-        if valore != ruolo:
-            cosa = (f"svuota {VAR}" if not valore else
-                    f"assegna {VAR} fra virgolette" if "Q" == valore else
-                    f"forza {VAR}=«{valore}»")
-            return f"il comando {cosa}, ma questa chiamata viene da «{ruolo}»"
-    return None
-
-def nega(motivo):
-    print(f"FIRMA: {motivo}. La firma dei commit viene dalla sessione, non si "
-          f"dichiara a mano: togli {VAR} dal comando e rilancialo "
-          f"(se la variabile compare solo come testo, mettila fra virgolette).",
-          file=sys.stderr)
-    sys.exit(2)
+def esamina(cmd, ruolo, livello=0):
+    """(motivo, crea): il motivo di un diniego, se il comando porta la variabile
+    fuori dal readonly con env o con una shell figlia; e se crea un commit."""
+    motivo, crea = None, False
+    p = parole(cmd)
+    for i, parola in enumerate(p):
+        coda = []
+        for q in p[i + 1:]:
+            if q and not q.strip(";&|()"):
+                break
+            coda.append(q)
+        nome = parola.rsplit("/", 1)[-1]
+        if nome == "env":
+            for k, a in enumerate(coda):
+                if a.startswith(VAR + "=") and a[len(VAR) + 1:] != ruolo:
+                    motivo = f"env assegna {VAR}=«{a[len(VAR) + 1:]}»"
+                if a in ("-u" + VAR, "--unset=" + VAR) or \
+                   (a in ("-u", "--unset") and coda[k + 1:k + 2] == [VAR]):
+                    motivo = f"env toglie {VAR}"
+        elif nome in SHELL:
+            for k, a in enumerate(coda[:-1]):
+                if re.fullmatch(r"-[A-Za-z]*c", a):
+                    dentro = coda[k + 1]
+                    for m in re.finditer(r"(?<![\w$])" + VAR + r"=([^\s;&|)]*)", dentro):
+                        if m.group(1).strip("\"'") != ruolo:
+                            motivo = f"una shell figlia ({nome} -c) assegna {VAR}"
+                    if livello < 3:
+                        m2, c2 = esamina(dentro, ruolo, livello + 1)
+                        motivo, crea = motivo or m2, crea or c2
+                    break
+        elif nome == "git":
+            k = 0
+            while k < len(coda) and coda[k].startswith("-"):
+                k += 2 if coda[k] in ("-C", "-c") else 1
+            if coda[k:k + 1] in (["commit"], ["merge"]):
+                crea = True
+    return motivo, crea
 
 def main():
     try:
@@ -139,7 +168,7 @@ def main():
         sys.exit(0)
     ti = d.get("tool_input") or {}
     cmd = ti.get("command")
-    if not isinstance(cmd, str) or not re.search(r"\bgit\b", cmd):
+    if not isinstance(cmd, str) or not cmd.strip():
         sys.exit(0)
     tipo = (d.get("agent_type") or "").strip()
     # Solo `cantiere:<ruolo>` e' un ruolo di cantiere: ne' `altro:qa-test` ne' un
@@ -157,14 +186,12 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
 
-    # La manomissione si cerca in OGNI comando che nomina git, senza dipendere dal
-    # riconoscere il verbo: `git "commit"` o `git -C "a b" commit` lo nascondevano,
-    # e il ruolo forzato passava.
-    testo = eseguito(cmd)
-    crea = CREA_COMMIT.search(testo)
-    motivo = manomissione(testo, ruolo)
+    motivo, crea = esamina(cmd, ruolo)
     if motivo:
-        nega(motivo)
+        print(f"FIRMA: {motivo}, ma questa chiamata viene da «{ruolo}». La firma dei "
+              f"commit viene dalla sessione, non si dichiara a mano: togli {VAR} dal "
+              f"comando e rilancialo.", file=sys.stderr)
+        sys.exit(2)
     if crea and not (di_cantiere and ruolo in ruoli_validi()):
         print(f"FIRMA: commit negato. agent_type ricevuto: «{tipo}». Firma un commit o "
               f"un merge solo un ruolo di cantiere, nella forma cantiere:<ruolo>. Riporta "
@@ -172,8 +199,10 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
+    # readonly: nella stessa shell la variabile non si riassegna, non si toglie e
+    # non si ridichiara (misure in testa al file)
     nuovo = dict(ti)
-    nuovo["command"] = f"export {VAR}={ruolo}; {cmd}"
+    nuovo["command"] = f"readonly {VAR}={ruolo}; export {VAR}; {cmd}"
     json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                       "updatedInput": nuovo}}, sys.stdout)
     sys.exit(0)

@@ -71,7 +71,8 @@ if [ "${CLAUDECODE:-}" = "1" ]; then
   # una riga sola, solo un nome: grep -x con un valore su piu' righe le prova tutte
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || nega "CANTIERE_AGENT non e' un nome di ruolo."
   [ -r "$RUOLI" ] || nega "manca l'elenco dei ruoli ($RUOLI): non posso verificare «$AGENTE»."
-  grep -v '^[[:space:]]*#' "$RUOLI" | grep -qxF -- "$AGENTE" \
+  # \r: con core.autocrlf l'elenco puo' arrivare con fine riga CRLF
+  tr -d '\r' < "$RUOLI" | grep -v '^[[:space:]]*#' | grep -qxF -- "$AGENTE" \
     || nega "«$AGENTE» non e' un ruolo di cantiere (elenco: githooks/ruoli)."
 else
   case "$SORGENTE" in merge|squash) exit 0 ;; esac
@@ -80,41 +81,55 @@ else
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
 fi
 
+# Una sola riscrittura del messaggio, in python.
+# - In sessione la firma dice chi ha fatto QUESTO commit: una firma gia' nel blocco
+#   dei trailer (ereditata da --amend, -c, -C, cherry-pick, squash, reword, o scritta
+#   a mano) si toglie e si mette quella del ruolo corrente. Si guarda solo l'ultimo
+#   paragrafo: una riga del CORPO che comincia con «Cantiere-Agent:» resta dov'e'.
+# - La firma va PRIMA dei commenti e della riga delle forbici: accodata in fondo,
+#   con `commit -v`, commit.verbose o cleanup=scissors finiva sotto le forbici e git
+#   la scartava (commit senza firma, uscita 0: terza review, 02/10).
+# - git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota
+#   (commit d5e8331, 13/09). Se l'ultimo paragrafo e' gia' un blocco di trailer la
+#   firma ci si accoda senza riga vuota: cosi' il Co-Authored-By di una persona
+#   resta un trailer.
+# Se python fallisce, in sessione il commit e' negato: meglio fermo che senza firma.
+SOSTITUISCI=0
 if [ "${CLAUDECODE:-}" = "1" ]; then
-  # La firma dice chi ha fatto QUESTO commit: una firma gia' nel blocco dei trailer
-  # (ereditata da --amend, -c, -C, cherry-pick, squash, reword, o scritta a mano) si
-  # toglie, e sotto si rimette quella del ruolo corrente. Ne resta una sola.
-  # Si guarda solo l'ultimo paragrafo: una riga del CORPO che comincia con
-  # «Cantiere-Agent:» e' testo e resta dov'e'. Se python fallisce il commit e'
-  # negato: meglio fermo che con due firme.
-  python3 - "$MSG_FILE" <<'PY_EOF' || nega "non sono riuscito a riscrivere la firma nel messaggio (python3 mancante o in errore)."
-import re, sys
-f = sys.argv[1]
-righe = open(f, encoding="utf-8", errors="replace").read().split("\n")
-# dopo la riga delle forbici c'e' il diff di `commit -v`; le righe # sono commenti
-fine = next((i for i, r in enumerate(righe) if re.match(r"# -+ >8 -+", r)), len(righe))
-ultimo = max((i for i in range(fine) if righe[i].strip() and not righe[i].startswith("#")), default=-1)
-inizio = ultimo
-while inizio > 0 and righe[inizio - 1].strip():
-    inizio -= 1
-firma = re.compile(r"(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
-tolte = {i for i in range(max(inizio, 0), ultimo + 1) if firma.match(righe[i])}
-testo = "\n".join(r for i, r in enumerate(righe) if i not in tolte)
-open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
-PY_EOF
+  SOSTITUISCI=1
 else
   # fuori da Claude Code: se la firma c'e' gia' (amend), non duplicarla
   grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
-  # git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
-  # con zero li legge come corpo, con due come paragrafo a se' (commit d5e8331, 13/09).
-  python3 - "$MSG_FILE" <<'PY_EOF'
-import sys
-f = sys.argv[1]
-testo = open(f, encoding="utf-8", errors="replace").read()
-open(f, "w", encoding="utf-8").write(testo.rstrip("\n") + "\n\n")
-PY_EOF
 fi
-
-printf 'Cantiere-Agent: %s\nCo-Authored-By: cantiere-%s <%s@cantiere.invalid>\n' \
-  "$AGENTE" "$AGENTE" "$AGENTE" >> "$MSG_FILE"
+python3 - "$MSG_FILE" "$AGENTE" "$SOSTITUISCI" <<'PY_EOF'
+import re, sys
+f, agente, sostituisci = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+righe = open(f, encoding="utf-8", errors="replace").read().split("\n")
+forbici = next((i for i, r in enumerate(righe) if re.match(r"# -+ >8 -+", r)), len(righe))
+ultimo = max((i for i in range(forbici) if righe[i].strip() and not righe[i].startswith("#")),
+             default=-1)
+testa, coda = righe[:ultimo + 1], righe[ultimo + 1:]
+inizio = max(ultimo, 0)
+while inizio > 0 and testa[inizio - 1].strip():
+    inizio -= 1
+paragrafo = testa[inizio:]
+if sostituisci:
+    firma = re.compile(r"(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
+    paragrafo = [r for r in paragrafo if not firma.match(r)]
+corpo = testa[:inizio] + paragrafo
+while corpo and not corpo[-1].strip():
+    corpo.pop()
+trailer = inizio > 0 and paragrafo and all(re.match(r"[A-Za-z0-9-]+: ?\S", r) for r in paragrafo)
+if not trailer:
+    corpo.append("")
+if ultimo < 0:          # messaggio ancora vuoto (editor): riga 1 per il titolo, poi una vuota
+    corpo.append("")
+corpo += [f"Cantiere-Agent: {agente}", f"Co-Authored-By: cantiere-{agente} <{agente}@cantiere.invalid>"]
+while coda and not coda[0].strip():
+    coda.pop(0)
+open(f, "w", encoding="utf-8").write("\n".join(corpo) + "\n" + ("\n" + "\n".join(coda) if coda else ""))
+PY_EOF
+if [ $? -ne 0 ] && [ "$SOSTITUISCI" = 1 ]; then
+  nega "non sono riuscito a scrivere la firma nel messaggio (python3 mancante o in errore)."
+fi
 exit 0

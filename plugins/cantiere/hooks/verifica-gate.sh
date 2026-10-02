@@ -299,13 +299,13 @@ print(json.dumps(d))' "$2" "$3" | "$H/agent-env.py" 2>/dev/null); rc=$?
   elif [ -z "$uscita" ]; then esito=niente
   else esito=$(printf '%s' "$uscita" | python3 -c 'import sys,json,re
 c=json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"]
-m=re.match(r"export CANTIERE_AGENT=(\S+); ",c); print(m.group(1) if m else "malformato")')
+m=re.match(r"readonly CANTIERE_AGENT=(\S+); export CANTIERE_AGENT; ",c); print(m.group(1) if m else "malformato")')
   fi
   if [ "$esito" = "$4" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$4" "$esito"; KO=$((KO+1)); fi
 }
 
-echo; echo "Primo strato — agent-env.py: il ruolo viene dal payload, su ogni forma di comando git"
+echo; echo "Primo strato — agent-env.py: il ruolo viene dal payload, su ogni comando Bash"
 agente_prova 'filo principale: git commit -m'          ''                 'git commit -m "x"'                    orchestrator
 agente_prova 'subagente di cantiere: git commit -m'    'cantiere:qa-test' 'git commit -m "x"'                    qa-test
 agente_prova 'git -C <dir> commit'                     'cantiere:devops'  'git -C /percorso commit -m x'         devops
@@ -316,37 +316,78 @@ EOF"                                                                            
 agente_prova 'bash -c "git commit"'                    ''                 'bash -c "git commit -m x"'            orchestrator
 agente_prova 'git merge --no-ff'                       'cantiere:qa-test' 'git merge --no-ff origin/x'           qa-test
 agente_prova 'ruolo esplicito uguale al payload'       ''                 'CANTIERE_AGENT=orchestrator git commit -m x' orchestrator
-agente_prova 'script che non nomina git (limite noto)' ''                 './scripts/x.sh'                       niente
+agente_prova 'script che non nomina git'               'cantiere:devops'  './scripts/x.sh'                       devops
+agente_prova 'npm version (committa senza nominare git)' ''               'npm version patch'                    orchestrator
+agente_prova 'make release'                            'cantiere:devops'  'make release'                         devops
+agente_prova 'agente fuori elenco, comando qualunque'  'Explore'          'ls -la'                               Explore
 agente_prova 'il messaggio cita la variabile'          ''                 'git commit -m "fix: CANTIERE_AGENT= vuota"' orchestrator
 agente_prova 'heredoc che cita la variabile'           ''                 "git commit -F - <<'EOF'
 prima era CANTIERE_AGENT=qa-test a mano
 EOF"                                                                                                              orchestrator
 
-echo; echo "Primo strato — la firma non si dichiara a mano"
-agente_prova 'ruolo forzato a un altro valore'         'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git commit -m x' deny
-agente_prova 'export di un altro ruolo, poi commit'    ''                 'export CANTIERE_AGENT=qa-test && git commit -m x' deny
-agente_prova 'variabile svuotata'                      ''                 'CANTIERE_AGENT= git commit -m x'      deny
-agente_prova 'variabile svuotata con le virgolette'    ''                 'CANTIERE_AGENT="" git commit -m x'    deny
-agente_prova 'variabile tolta con env -u'              ''                 'env -u CANTIERE_AGENT git commit -m x' deny
-agente_prova 'variabile tolta con unset'               ''                 'unset CANTIERE_AGENT; git commit -m x' deny
-agente_prova 'forzata dentro bash -c'                  ''                 'bash -c "CANTIERE_AGENT=qa-test git commit -m x"' deny
-agente_prova 'forzata su un merge'                     ''                 'CANTIERE_AGENT=devops git merge --no-ff x' deny
-agente_prova 'forzata sulla riga che apre un heredoc'   'cantiere:qa-test' "cat <<'EOF' | CANTIERE_AGENT=orchestrator git commit -F -
-titolo
-EOF"                                                                                                              deny
-agente_prova 'git grep della variabile non e manomissione' ''             'git grep -n "CANTIERE_AGENT=" plugins' orchestrator
-agente_prova 'git log -S della variabile'              'cantiere:qa-test' 'git log -S"CANTIERE_AGENT=" --oneline' qa-test
-# seconda review (02/10): la manomissione non dipende dal riconoscere il verbo
-agente_prova 'forzata, git -C con uno spazio fra virgolette' 'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git -C "/tmp/a b" commit -m x' deny
-agente_prova 'forzata, git -c con un valore quotato'   'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git -c user.name="A B" commit -m x' deny
-agente_prova 'forzata, verbo fra virgolette'           'cantiere:qa-test' 'CANTIERE_AGENT=orchestrator git "commit" -m x' deny
-agente_prova 'forzata su un comando che non firma'     ''                 'CANTIERE_AGENT=devops git status'     deny
-agente_prova 'uguale al payload, fra virgolette'       ''                 'CANTIERE_AGENT="orchestrator" git commit -m x' deny
-agente_prova '-am con la variabile nel messaggio'      ''                 'git commit -am "fix: CANTIERE_AGENT= vuota"' orchestrator
-agente_prova '--message= con la variabile'             ''                 'git commit --message="CANTIERE_AGENT=x citata"' orchestrator
-agente_prova '-m attaccato al messaggio'               ''                 'git commit -m"CANTIERE_AGENT= attaccata"' orchestrator
-agente_prova '-m senza virgolette'                     ''                 'git commit -m CANTIERE_AGENT=x'       orchestrator
-agente_prova '-F da file'                              'cantiere:devops'  'git commit -F msg.txt'                devops
+echo; echo "Primo strato — fuori dalla stessa shell il readonly non vale: env e shell figlie negate"
+agente_prova 'env con un altro ruolo'                  'cantiere:qa-test' 'env CANTIERE_AGENT=orchestrator git commit -m x' deny
+agente_prova 'env con la variabile fra virgolette'     'cantiere:qa-test' 'env "CANTIERE_AGENT=orchestrator" git commit -m x' deny
+agente_prova 'env con la variabile vuota'              ''                 'env CANTIERE_AGENT= git commit -m x'  deny
+agente_prova 'env -u'                                  ''                 'env -u CANTIERE_AGENT git commit -m x' deny
+agente_prova 'env --unset='                            ''                 'env --unset=CANTIERE_AGENT git commit -m x' deny
+agente_prova '/usr/bin/env dopo un ;'                  'cantiere:qa-test' 'ls -m;/usr/bin/env CANTIERE_AGENT=orchestrator git commit -m x' deny
+agente_prova 'env su uno script'                       'cantiere:qa-test' 'env CANTIERE_AGENT=orchestrator ./scripts/x.sh' deny
+agente_prova 'bash -c con assegnazione'                ''                 'bash -c "CANTIERE_AGENT=qa-test git commit -m x"' deny
+agente_prova 'sh -c con assegnazione'                  'cantiere:qa-test' "sh -c 'CANTIERE_AGENT=orchestrator git commit -m x'" deny
+agente_prova 'bash -c con env dentro'                  'cantiere:qa-test' "bash -c 'env CANTIERE_AGENT=orchestrator git commit -m x'" deny
+agente_prova 'env con il ruolo del payload: ammesso'   'cantiere:qa-test' 'env CANTIERE_AGENT=qa-test git commit -m x' qa-test
+agente_prova 'messaggio che cita env -u: non e un comando' ''             'git commit -m "nega env -u CANTIERE_AGENT e env CANTIERE_AGENT=x"' orchestrator
+agente_prova 'git grep della variabile'                ''                 'git grep -n "CANTIERE_AGENT=" plugins' orchestrator
+agente_prova 'heredoc che cita env'                    ''                 "git commit -F - <<'EOF'
+prima: env CANTIERE_AGENT=qa-test git commit
+EOF"                                                                                                              orchestrator
+
+echo; echo "Primo strato — nella stessa shell il readonly regge: comando riscritto ed ESEGUITO (repo usa e getta)"
+# Il payload e' di cantiere:qa-test e il comando prova a firmare da orchestrator, un
+# ruolo valido che il secondo strato accetterebbe. Si esegue in /bin/bash, la shell
+# del Bash tool, il comando riscritto da agent-env.py, con il git hook vero.
+shell_prova() { # etichetta, forma (GC = il commit), atteso: <ruolo> | nessun-commit | negato-primo
+  local T cmd val prima
+  T=$(mktemp -d)
+  ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T/r" && cd "$T/r" && git config user.email p@p.invalid \
+    && git config user.name p && echo a > a && git add -A && git commit -qm base \
+    && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+    && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo b > b && git add b \
+    && printf '#!/bin/bash\nCANTIERE_AGENT=orchestrator git commit -qm t\n' > "$T/s.sh" \
+    && printf '#!/bin/bash\ngit commit -qm t\n' > "$T/pulito.sh" && chmod +x "$T/s.sh" "$T/pulito.sh" ) >/dev/null 2>&1
+  prima=$(git -C "$T/r" rev-parse HEAD)
+  cmd="cd '$T/r' && ${2//GC/git commit -qm t}"; cmd="${cmd//SCRIPT/$T}"
+  cmd=$(python3 -c 'import json,sys; print(json.dumps({"agent_type":"cantiere:qa-test","tool_input":{"command":sys.argv[1]}}))' "$cmd" \
+        | "$H/agent-env.py" 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null)
+  if [ -z "$cmd" ]; then val=negato-primo
+  else
+    env -u CANTIERE_AGENT CLAUDECODE=1 /bin/bash -c "$cmd" >/dev/null 2>&1
+    if [ "$(git -C "$T/r" rev-parse HEAD)" = "$prima" ]; then val=nessun-commit
+    else val=$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' | tr -d '\n'); [ -n "$val" ] || val=senza-firma; fi
+  fi
+  if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+shell_prova 'nessuna manomissione'                       'GC'                                        qa-test
+shell_prova 'CANTIERE_AGENT=x git commit'                'CANTIERE_AGENT=orchestrator GC'            qa-test
+shell_prova 'export CANTIERE_AGENT=x; ...'               'export CANTIERE_AGENT=orchestrator; GC'    qa-test
+shell_prova 'export "CANTIERE_AGENT=x"; ...'             'export "CANTIERE_AGENT=orchestrator"; GC'  qa-test
+shell_prova 'unset CANTIERE_AGENT; ...'                  'unset CANTIERE_AGENT; GC'                  qa-test
+shell_prova 'declare CANTIERE_AGENT=x; ...'              'declare CANTIERE_AGENT=orchestrator; GC'   qa-test
+shell_prova 'eval "CANTIERE_AGENT=x git commit"'         'eval "CANTIERE_AGENT=orchestrator GC"'     qa-test
+shell_prova 'ls -m;CANTIERE_AGENT=x git commit'          'ls -m >/dev/null;CANTIERE_AGENT=orchestrator GC' qa-test
+shell_prova 'local dentro una funzione'                  'f(){ local CANTIERE_AGENT=orchestrator; GC; }; f' qa-test
+shell_prova 'CANTIERE_AGENT=x; git commit (si ferma)'    'CANTIERE_AGENT=orchestrator; GC'           nessun-commit
+shell_prova 'in una sottoshell (si ferma)'               '(CANTIERE_AGENT=orchestrator; GC)'         nessun-commit
+shell_prova 'export -n: il git hook nega'                'export -n CANTIERE_AGENT; GC'              nessun-commit
+shell_prova 'CANTIERE_AGENT= vuota'                      'CANTIERE_AGENT= GC'                        qa-test
+shell_prova 'script che committa: firmato dal ruolo'     'SCRIPT/pulito.sh'                          qa-test
+shell_prova 'env CANTIERE_AGENT=x: negato prima'         'env CANTIERE_AGENT=orchestrator GC'        negato-primo
+shell_prova 'bash -c con assegnazione: negato prima'     "bash -c 'CANTIERE_AGENT=orchestrator GC'"  negato-primo
+shell_prova 'CONFINE: script che assegna e committa'     'SCRIPT/s.sh'                               orchestrator
 
 echo; echo "Primo strato — chi non e' un ruolo di cantiere non committa"
 agente_prova 'Explore: git -C con spazio, commit'      'Explore'          'git -C "/tmp/a b" commit -m x'        deny
@@ -512,6 +553,37 @@ va in fondo al messaggio.' -m 'Cantiere-Agent: devops'
 }
 corpo_prova 'riga del corpo «Cantiere-Agent:» resta'       vero  'corpo:1 firma:qa-test,'
 corpo_prova 'python3 in errore: commit negato'           rotto negato
+
+echo; echo "Secondo strato — la firma va dove git la legge: prima delle forbici, dentro il blocco dei trailer"
+inserisci_prova() { # etichetta, scenario, atteso
+  local T val
+  T=$(mktemp -d)
+  ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T/r" && cd "$T/r" && git config user.email p@p.invalid \
+    && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+    && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A
+    [ "$2" = crlf ] && sed -i 's/$/\r/' githooks/ruoli
+    [ "$2" = amend-v ] && CLAUDECODE=1 CANTIERE_AGENT=devops git commit -qm base
+    export CLAUDECODE=1 CANTIERE_AGENT=qa-test
+    case "$2" in
+      v)        GIT_EDITOR='sed -i 1s/^/titolo/' git commit -q -v ;;
+      verbose)  GIT_EDITOR='sed -i 1s/^/titolo/' git -c commit.verbose=true commit -q ;;
+      scissors) GIT_EDITOR='sed -i 1s/^/titolo/' git -c commit.cleanup=scissors commit -q ;;
+      amend-v)  GIT_EDITOR=true git commit -q --amend -v ;;
+      umano)    git commit -qm 'feat: y' -m 'Co-Authored-By: Umano <u@e.invalid>' ;;
+      crlf)     git commit -qm 'feat: y' ;;
+    esac ) >/dev/null 2>&1
+  val="firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' 2>/dev/null | grep . | tr '\n' ',')"
+  [ "$2" = umano ] && val="$val umano:$(git -C "$T/r" log -1 --format='%(trailers:key=Co-Authored-By,valueonly)' | grep -c '^Umano ')"
+  if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+inserisci_prova 'git commit -v'                                v        'firma:qa-test,'
+inserisci_prova 'commit.verbose=true'                          verbose  'firma:qa-test,'
+inserisci_prova 'commit.cleanup=scissors'                      scissors 'firma:qa-test,'
+inserisci_prova '--amend -v su un commit firmato devops'       amend-v  'firma:qa-test,'
+inserisci_prova 'il Co-Authored-By di una persona resta trailer' umano  'firma:qa-test, umano:1'
+inserisci_prova 'githooks/ruoli con fine riga CRLF'            crlf     'firma:qa-test,'
 
 echo; echo "Secondo strato — il diniego dice a una persona cosa fare (! ha CLAUDECODE=1)"
 T=$(mktemp -d); ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T" && cd "$T" && git config user.email p@p.invalid \
