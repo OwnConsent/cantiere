@@ -34,9 +34,8 @@
 # - in sessione ogni firma gia' presente nel messaggio viene sostituita da quella del
 #   ruolo corrente. Misurato con git 2.43: l'hook gira con sorgente «commit» per
 #   --amend, -c e -C, «message» per cherry-pick e revert, «squash» dopo merge
-#   --squash. Un rebase non interattivo NON passa dall'hook e conserva le firme dei
-#   commit riscritti; `rebase -i` con reword si', e rifirma col ruolo corrente
-#   (misura della seconda review). La sostituzione guarda solo l'ultimo paragrafo.
+#   --squash. Durante un rebase la firma non si tocca: vedi sotto. La sostituzione
+#   guarda solo l'ultimo paragrafo.
 #   `git interpret-trailers --if-exists replace` non basta: toglie solo il trailer
 #   piu' vicino («The deleted trailer will be the closest one», git-interpret-
 #   trailers(1); provato: con due firme ne resta una vecchia) e sostituirebbe il
@@ -59,6 +58,21 @@ MSG_FILE="$1"
 SORGENTE="${2:-}"
 AGENTE="${CANTIERE_AGENT:-}"
 RUOLI="$(cd "$(dirname "$0")" && pwd)/ruoli"
+
+# Durante un rebase l'hook non tocca niente: un rebase sposta commit, non ne crea, e
+# le firme restano di chi li ha fatti (decisione di Andrea, 02/10). Vale anche per
+# reword, squash, fixup e per l'amend in una sosta di `edit`.
+# Misurato con git 2.43: con il backend merge (il predefinito: `git rebase main`,
+# `git pull --rebase`, `rebase -i`) l'hook gira a ogni commit riapplicato ed esiste
+# rebase-merge/ nella cartella git; con il backend apply l'hook non gira affatto.
+# La misura del 01-02/10 («il rebase non passa dall'hook») era VIZIATA: i commit del
+# ramo di prova erano gia' su main e il rebase li saltava. Senza questa uscita un
+# `git rebase main` rifirmava col ruolo corrente tutti i commit del ramo.
+# Limite: anche un commit NUOVO fatto durante una sosta del rebase passa di qui, e
+# resta senza firma.
+for d in rebase-merge rebase-apply; do
+  [ -d "$(git rev-parse --git-path "$d" 2>/dev/null)" ] && exit 0
+done
 
 nega() {
   printf 'COMMIT NEGATO: %s\n' "$1" >&2
@@ -93,6 +107,16 @@ fi
 #   (commit d5e8331, 13/09). Se l'ultimo paragrafo e' gia' un blocco di trailer la
 #   firma ci si accoda senza riga vuota: cosi' il Co-Authored-By di una persona
 #   resta un trailer.
+# - Le righe che cominciano con # sono commenti solo se git le togliera': con -m, -F,
+#   --no-edit e nei merge senza editor sono CONTENUTO («Closes» / «#123», il blocco
+#   «# Conflicts:») e la firma va dopo, non in mezzo (quarta review, 02/10).
+#   git-commit(1), --cleanup: «strip: ... commentary», «whitespace: Same as strip
+#   except #commentary is not removed», «default: Same as strip if the message is to
+#   be edited. Otherwise whitespace». Se il messaggio non passa dall'editor git
+#   chiama l'hook con GIT_EDITOR=: (misurato; githooks(5) lo documenta per
+#   pre-commit). `git interpret-trailers` non aiuta: tratta ogni riga # come
+#   commento e sposta «#123» sotto la firma (misurato). Limite: --cleanup dato
+#   sulla riga di comando l'hook non lo vede, legge solo commit.cleanup.
 # Se python fallisce, in sessione il commit e' negato: meglio fermo che senza firma.
 SOSTITUISCI=0
 if [ "${CLAUDECODE:-}" = "1" ]; then
@@ -102,12 +126,18 @@ else
   grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
 fi
 python3 - "$MSG_FILE" "$AGENTE" "$SOSTITUISCI" <<'PY_EOF'
-import re, sys
+import os, re, subprocess, sys
 f, agente, sostituisci = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 righe = open(f, encoding="utf-8", errors="replace").read().split("\n")
-forbici = next((i for i, r in enumerate(righe) if re.match(r"# -+ >8 -+", r)), len(righe))
-ultimo = max((i for i in range(forbici) if righe[i].strip() and not righe[i].startswith("#")),
-             default=-1)
+editato = os.environ.get("GIT_EDITOR") != ":"
+pulizia = subprocess.run(["git", "config", "commit.cleanup"], capture_output=True,
+                         text=True).stdout.strip() or "default"
+commenti = pulizia == "strip" or (editato and pulizia == "default")
+forbici = len(righe)
+if editato:
+    forbici = next((i for i, r in enumerate(righe) if re.match(r"# -+ >8 -+", r)), len(righe))
+ultimo = max((i for i in range(forbici)
+              if righe[i].strip() and not (commenti and righe[i].startswith("#"))), default=-1)
 testa, coda = righe[:ultimo + 1], righe[ultimo + 1:]
 inizio = max(ultimo, 0)
 while inizio > 0 and testa[inizio - 1].strip():

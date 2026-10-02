@@ -86,15 +86,19 @@ del Bash tool (`/bin/bash -c "source <snapshot> && ... eval ..."`, non posix):
   con uscita 1, nessun commit;
 - `export -n CANTIERE_AGENT`: il git hook non vede la variabile e nega.
 Fuori dalla stessa shell il readonly non vale, e sono le sole forme che questo
-hook cerca ancora nel testo e nega: `env CANTIERE_AGENT=x`, `env -u`, e
+hook cerca ancora nel testo e nega: `env CANTIERE_AGENT=x`, `env -u`,
 `bash -c` / `sh -c` con un'assegnazione nella stringa (la shell figlia eredita
-il valore, non il readonly). Tolte perche' non servono piu': le regole sulle
+il valore, non il readonly) e, dalla quarta review, una shell che legge da stdin
+(`... | bash`, `bash <<EOF`) quando il comando nomina la variabile. Tolte perche' non servono piu': le regole sulle
 stringhe fra virgolette, su -m/-F come prosa, su unset e sull'assegnazione
 nella stessa shell.
 
 Limiti noti: uno script che assegna la variabile e committa (il confine qui
 sopra); `eval` o un altro interprete (python, perl) che lancia env o una shell;
-una shell diversa da bash non e' stata misurata. E questo hook esiste solo se il
+una shell diversa da bash non e' stata misurata. Due falsi dinieghi noti e
+lasciati: `bash -c 'git commit -m "... CANTIERE_AGENT=x ..."'` (il messaggio
+quotato dentro la stringa e' letto come assegnazione) ed `echo git commit` da un
+agente fuori elenco (git e commit come argomenti di un altro comando). E questo hook esiste solo se il
 plugin e' attivo nella sessione.
 """
 import json, os, re, shlex, sys
@@ -123,7 +127,7 @@ def parole(cmd):
     except ValueError:            # virgolette non chiuse: si spezza sugli spazi
         return cmd.split()
 
-def esamina(cmd, ruolo, livello=0):
+def esamina(cmd, ruolo, livello=0, nomina=False):
     """(motivo, crea): il motivo di un diniego, se il comando porta la variabile
     fuori dal readonly con env o con una shell figlia; e se crea un commit."""
     motivo, crea = None, False
@@ -143,6 +147,11 @@ def esamina(cmd, ruolo, livello=0):
                    (a in ("-u", "--unset") and coda[k + 1:k + 2] == [VAR]):
                     motivo = f"env toglie {VAR}"
         elif nome in SHELL:
+            # una shell che legge i comandi da stdin (`... | bash`, `bash <<EOF`):
+            # non si guarda dentro, si nega se il comando nomina la variabile
+            if nomina and (p[i - 1:i] in (["|"], ["|&"]) and i > 0
+                           or any(a.startswith("<<") for a in coda)):
+                motivo = f"una shell figlia ({nome}) legge da stdin un testo che nomina {VAR}"
             for k, a in enumerate(coda[:-1]):
                 if re.fullmatch(r"-[A-Za-z]*c", a):
                     dentro = coda[k + 1]
@@ -150,7 +159,7 @@ def esamina(cmd, ruolo, livello=0):
                         if m.group(1).strip("\"'") != ruolo:
                             motivo = f"una shell figlia ({nome} -c) assegna {VAR}"
                     if livello < 3:
-                        m2, c2 = esamina(dentro, ruolo, livello + 1)
+                        m2, c2 = esamina(dentro, ruolo, livello + 1, nomina)
                         motivo, crea = motivo or m2, crea or c2
                     break
         elif nome == "git":
@@ -186,7 +195,7 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
 
-    motivo, crea = esamina(cmd, ruolo)
+    motivo, crea = esamina(cmd, ruolo, nomina=VAR in cmd)
     if motivo:
         print(f"FIRMA: {motivo}, ma questa chiamata viene da «{ruolo}». La firma dei "
               f"commit viene dalla sessione, non si dichiara a mano: togli {VAR} dal "

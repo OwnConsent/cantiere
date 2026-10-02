@@ -336,6 +336,14 @@ agente_prova 'env su uno script'                       'cantiere:qa-test' 'env C
 agente_prova 'bash -c con assegnazione'                ''                 'bash -c "CANTIERE_AGENT=qa-test git commit -m x"' deny
 agente_prova 'sh -c con assegnazione'                  'cantiere:qa-test' "sh -c 'CANTIERE_AGENT=orchestrator git commit -m x'" deny
 agente_prova 'bash -c con env dentro'                  'cantiere:qa-test' "bash -c 'env CANTIERE_AGENT=orchestrator git commit -m x'" deny
+agente_prova 'bash <<EOF con assegnazione nel corpo'     'cantiere:qa-test' "bash <<'EOF'
+CANTIERE_AGENT=orchestrator git commit -m x
+EOF"                                                                                                              deny
+agente_prova 'echo ... | bash con assegnazione'        'cantiere:qa-test' "echo 'CANTIERE_AGENT=orchestrator git commit -m x' | bash" deny
+agente_prova 'echo ciao | bash: ammesso'               'cantiere:qa-test' 'echo ciao | bash'                     qa-test
+agente_prova 'bash <<EOF senza la variabile: ammesso'  'cantiere:qa-test' "bash <<'EOF'
+git status
+EOF"                                                                                                              qa-test
 agente_prova 'env con il ruolo del payload: ammesso'   'cantiere:qa-test' 'env CANTIERE_AGENT=qa-test git commit -m x' qa-test
 agente_prova 'messaggio che cita env -u: non e un comando' ''             'git commit -m "nega env -u CANTIERE_AGENT e env CANTIERE_AGENT=x"' orchestrator
 agente_prova 'git grep della variabile'                ''                 'git grep -n "CANTIERE_AGENT=" plugins' orchestrator
@@ -509,7 +517,6 @@ eredita_prova() { # sorgente, atteso (<ruolo>x<quante firme>), [mantieni CLAUDEC
       squash)       git merge -q --squash lato && git commit -q --no-edit ;;
       merge-m)      echo n > n && git add -A && CANTIERE_AGENT=devops git commit -qm d \
                       && git merge -q --no-ff -m 'merge' -m 'Cantiere-Agent: devops' lato ;;
-      reword)       git switch -q lato && GIT_SEQUENCE_EDITOR="sed -i s/^pick/reword/" git rebase -q -i HEAD~1 ;;
       due-firme)    echo n > n && git add -A && git commit -qm 'feat: x' -m 'Cantiere-Agent: devops
 Cantiere-Agent: seo
 Co-Authored-By: Umano <umano@esempio.invalid>' ;;
@@ -522,7 +529,7 @@ Co-Authored-By: Umano <umano@esempio.invalid>' ;;
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$etichetta" "$2" "$val"; KO=$((KO+1)); fi
   rm -rf "$T"
 }
-for o in amend amend-m commit-C commit-c cherry-pick revert squash merge-m reword due-firme a-mano; do
+for o in amend amend-m commit-C commit-c cherry-pick revert squash merge-m due-firme a-mano; do
   eredita_prova "$o" qa-testx1
 done
 # fuori da Claude Code un amend non tocca la firma che c'e'
@@ -571,7 +578,20 @@ inserisci_prova() { # etichetta, scenario, atteso
       amend-v)  GIT_EDITOR=true git commit -q --amend -v ;;
       umano)    git commit -qm 'feat: y' -m 'Co-Authored-By: Umano <u@e.invalid>' ;;
       crlf)     git commit -qm 'feat: y' ;;
+      cancelletto) git commit -qm 'fix: x' -m 'Closes
+#123' ;;
+      hashtag)  printf 'fix: x\n\ncorpo\n\n#hashtag\n' > ../m && git commit -q -F ../m ;;
+      conflitto) CANTIERE_AGENT=devops git commit -qm base && git switch -qc lato && echo l > a && CANTIERE_AGENT=devops git commit -qam lato \
+                 && git switch -q main && echo m > a && CANTIERE_AGENT=devops git commit -qam main2 \
+                 && { git merge -q lato; echo r > a; git add -A; git commit -q --no-edit; } ;;
     esac ) >/dev/null 2>&1
+  case "$2" in cancelletto|hashtag|conflitto)
+    # la riga con # deve restare nel corpo, PRIMA della firma
+    val="firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' 2>/dev/null | grep . | tr '\n' ',') cancelletto-prima-della-firma:$(git -C "$T/r" log -1 --format=%B | awk '/^#/{c=NR} /^Cantiere-Agent:/{f=NR} END{print (c && f && c<f) ? "si" : "no"}')"
+    if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+    else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
+    rm -rf "$T"; return ;;
+  esac
   val="firma:$(git -C "$T/r" log -1 --format='%(trailers:key=Cantiere-Agent,valueonly)' 2>/dev/null | grep . | tr '\n' ',')"
   [ "$2" = umano ] && val="$val umano:$(git -C "$T/r" log -1 --format='%(trailers:key=Co-Authored-By,valueonly)' | grep -c '^Umano ')"
   if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
@@ -584,6 +604,50 @@ inserisci_prova 'commit.cleanup=scissors'                      scissors 'firma:q
 inserisci_prova '--amend -v su un commit firmato devops'       amend-v  'firma:qa-test,'
 inserisci_prova 'il Co-Authored-By di una persona resta trailer' umano  'firma:qa-test, umano:1'
 inserisci_prova 'githooks/ruoli con fine riga CRLF'            crlf     'firma:qa-test,'
+inserisci_prova '-m con una riga che comincia con #'            cancelletto 'firma:qa-test, cancelletto-prima-della-firma:si'
+inserisci_prova '-F con un #hashtag finale'                    hashtag     'firma:qa-test, cancelletto-prima-della-firma:si'
+inserisci_prova 'merge con conflitto e blocco # Conflicts:'    conflitto   'firma:qa-test, cancelletto-prima-della-firma:si'
+
+echo; echo "Secondo strato — un rebase sposta commit, non ne crea: le firme restano"
+rebase_prova() { # etichetta, forma, atteso
+  local T val
+  T=$(mktemp -d)
+  ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T/r" && cd "$T/r" && git config user.email p@p.invalid \
+    && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+    && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks
+    export CLAUDECODE=1 CANTIERE_AGENT=devops
+    echo a > a && git add -A && git commit -qm base && git switch -qc lato
+    for n in 1 2; do echo "$n" > "l$n"; git add -A; git commit -qm "lato $n"; done
+    git switch -q main && echo m > m && git add -A && git commit -qm main2
+    [ "$2" = conflitto ] && { echo c > l1; git add -A; git commit -qm scontro; }
+    git switch -q lato
+    export CANTIERE_AGENT=qa-test GIT_EDITOR=true
+    case "$2" in
+      semplice)  git rebase -q main ;;
+      apply)     git rebase -q --apply main ;;
+      pull)      git pull -q --rebase . main ;;
+      reword)    GIT_SEQUENCE_EDITOR='sed -i 1s/^pick/reword/' git rebase -q -i main ;;
+      squash)    GIT_SEQUENCE_EDITOR='sed -i 2s/^pick/squash/' git rebase -q -i main ;;
+      fixup)     GIT_SEQUENCE_EDITOR='sed -i 2s/^pick/fixup/' git rebase -q -i main ;;
+      edit)      GIT_SEQUENCE_EDITOR='sed -i 1s/^pick/edit/' git rebase -q -i main; echo x >> l1; git add -A
+                 git commit -q --amend --no-edit; git rebase --continue ;;
+      conflitto) git rebase -q main; echo r > l1; git add -A; git rebase --continue ;;
+    esac ) >/dev/null 2>&1
+  if [ -d "$T/r/.git/rebase-merge" ] || [ -d "$T/r/.git/rebase-apply" ] || ! git -C "$T/r" merge-base --is-ancestor main lato; then val=rebase-non-finito
+  else val=$(git -C "$T/r" log main..lato --format=%B | sed -n 's/^ *Cantiere-Agent: //p' | sort -u | tr '\n' ',')
+       val="${val:-niente}"; fi
+  if [ "$val" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+rebase_prova 'git rebase main (backend merge)'           semplice  'devops,'
+rebase_prova 'git rebase --apply main'                   apply     'devops,'
+rebase_prova 'git pull --rebase'                         pull      'devops,'
+rebase_prova 'rebase -i con reword'                      reword    'devops,'
+rebase_prova 'rebase -i con squash'                      squash    'devops,'
+rebase_prova 'rebase -i con fixup'                       fixup     'devops,'
+rebase_prova 'rebase -i con edit e commit --amend'       edit      'devops,'
+rebase_prova 'rebase con conflitto e --continue'         conflitto 'devops,'
 
 echo; echo "Secondo strato — il diniego dice a una persona cosa fare (! ha CLAUDECODE=1)"
 T=$(mktemp -d); ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T" && cd "$T" && git config user.email p@p.invalid \
