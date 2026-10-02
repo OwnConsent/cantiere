@@ -114,6 +114,65 @@ bash_hook "cp segreto.txt $HOME/uscita.txt"             guard-paths.sh deny
 bash_hook 'cat ../cmp/.env'                             guard-paths.sh deny
 bash_hook 'cd ../cmp; cat .env'                          guard-paths.sh deny
 
+echo; echo "Heredoc quotati: il corpo e' testo, la shell non lo espande (02/10)"
+# $HOME/fuori.txt non esiste, ma la cartella che lo conterrebbe si': per il livello 3
+# e' un percorso fuori dal progetto che si puo' toccare.
+perimetro_prova() { # etichetta, comando, atteso
+  local out rc
+  out=$(python3 -c 'import sys,json;print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$2" \
+        | "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
+  verdetto "$rc" "$3" "$1" "$out"
+}
+perimetro_prova "--body-file - <<'EOF' che cita un percorso"  "gh pr create --title t --body-file - <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" pass
+perimetro_prova "-F - <<'EOF' che cita un percorso"           "gh pr create --title t -F - <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" pass
+perimetro_prova "cat > file <<'EOF', poi gh pr create -F"     "cat > corpo.md <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+gh pr create --title t -F corpo.md" pass
+perimetro_prova '<<"EOF" e <<\EOF sono quotati'              "cat > a.md <<\"EOF\"
+vedi $HOME/fuori.txt
+EOF
+cat > b.md <<\\EOF
+vedi $HOME/fuori.txt
+EOF" pass
+perimetro_prova '--body=percorso in una parola'               "gh pr create --title t --body=$HOME/fuori.txt" pass
+perimetro_prova 'heredoc NON quotato: resta scandito'         "gh pr create --title t -F - <<EOF
+il collaudo gira in $HOME/fuori.txt e basta
+EOF" deny
+perimetro_prova "bash <<'EOF': il corpo e' codice"            "bash <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "cat <<'EOF' | bash: interprete sulla riga"   "cat <<'EOF' | bash
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova 'dopo la chiusura si torna a scandire'        "cat > a.md <<'EOF'
+testo
+EOF
+cat $HOME/fuori.txt" deny
+perimetro_prova 'heredoc quotato senza chiusura: scandito'    "cat <<'EOF'
+cat $HOME/fuori.txt" deny
+perimetro_prova 'heredoc quotato con una risalita: livello 4' "gh pr create --title t -F - <<'EOF'
+il caso cat ../cmp/.env
+EOF" deny
+
+echo; echo "Sostituzioni di comando: dentro le virgolette doppie si eseguono (02/10)"
+perimetro_prova '--body "$(cat /fuori)"'                      "gh pr create --title t --body \"\$(cat $HOME/fuori.txt)\"" deny
+perimetro_prova '--body "... `cat /fuori` ..."'               "gh pr create --title t --body \"prima \`cat $HOME/fuori.txt\` dopo\"" deny
+perimetro_prova '--body="$(cat /fuori) ..."'                  "gh pr create --title t --body=\"\$(cat $HOME/fuori.txt) x\"" deny
+perimetro_prova 'sostituzione dentro una sostituzione'        "echo \"\$(echo \"\$(cat $HOME/fuori.txt)\")\"" deny
+perimetro_prova "un apostrofo fra le doppie non la nasconde"   "gh pr create --title t --body \"l'hook legge \$(cat $HOME/fuori.txt) e basta\"" deny
+perimetro_prova '--body "$(cat dentro/il/progetto)"'          'gh pr create --title t --body "$(cat docs/x.md)"' pass
+perimetro_prova '--body "testo con /percorso/fuori"'          "gh pr create --title t --body \"testo con $HOME/fuori.txt dentro\"" pass
+perimetro_prova "fra apici singoli non si esegue"             "git commit -m 'la forma \$(cat $HOME/fuori.txt) passava'" pass
+perimetro_prova "--body \"\$(cat <<'EOF' ...)\" con un percorso" "gh pr create --title t --body \"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+
 echo; echo "Lavoro normale — deve passare"
 bash_hook 'npm run build'                             guard-prod.sh  pass
 bash_hook 'go test -race ./...'                       guard-paths.sh pass
