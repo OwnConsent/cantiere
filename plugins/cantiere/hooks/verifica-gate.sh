@@ -397,7 +397,7 @@ if command -v git >/dev/null 2>&1; then
     hook_prova si Explore  "$o" negato
   done
   hook_prova si $'qa-test\nqualsiasi cosa' commit negato
-  hook_prova si qa-test      firma-a-mano negato
+  hook_prova si qa-test      firma-a-mano qa-test
   hook_prova si orchestrator firma-a-mano orchestrator
   hook_prova no ''           firma-a-mano orchestrator
   # fuori da Claude Code niente cambia: nessun diniego, i merge non si firmano, e
@@ -415,6 +415,58 @@ if command -v git >/dev/null 2>&1; then
 else
   printf "  ${X}KO${N}    %-52s git non installato\n" "git hook"; KO=$((KO+1))
 fi
+
+echo; echo "Secondo strato — la firma e' di chi fa QUESTO commit: quella ereditata si sostituisce"
+eredita_prova() { # sorgente, atteso (<ruolo>x<quante firme>), [mantieni CLAUDECODE: si|no]
+  local T R val etichetta sess
+  etichetta="qa-test su un commit firmato devops: $1"
+  T=$(mktemp -d); R="$T/repo"
+  (
+    unset CLAUDECODE CANTIERE_AGENT
+    git init -q -b main "$R" && cd "$R" && git config user.email prova@cantiere.invalid && git config user.name prova \
+      && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+      && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks \
+      && echo a > a && git add -A && git commit -qm base \
+      && git switch -qc lato && echo l > l && git add -A \
+      && CLAUDECODE=1 CANTIERE_AGENT=devops git commit -qm lato && git switch -q main
+    sess="CLAUDECODE=1"; [ "${3:-si}" = no ] && sess="NIENTE=1"
+    export "$sess" CANTIERE_AGENT=qa-test GIT_EDITOR=true
+    case "$1" in
+      amend)        git switch -q lato && git commit -q --amend --no-edit ;;
+      amend-m)      git switch -q lato && git commit -q --amend -m "$(git log -1 --format=%B)" ;;
+      commit-C)     echo n > n && git add -A && git commit -q -C lato ;;
+      commit-c)     echo n > n && git add -A && git commit -q -c lato ;;
+      cherry-pick)  git cherry-pick lato ;;
+      revert)       git switch -q lato && git revert --no-edit HEAD ;;
+      squash)       git merge -q --squash lato && git commit -q --no-edit ;;
+      merge-m)      echo n > n && git add -A && CANTIERE_AGENT=devops git commit -qm d \
+                      && git merge -q --no-ff -m 'merge' -m 'Cantiere-Agent: devops' lato ;;
+      a-mano)       echo n > n && git add -A && git commit -qm 'feat: x' -m 'Cantiere-Agent: orchestrator' ;;
+    esac
+  ) >/dev/null 2>&1
+  val=$(git -C "$R" log -1 HEAD --format=%B | grep -E '^[[:space:]]*Cantiere-Agent:' | sed 's/^ *Cantiere-Agent: //' | sort | uniq -c | awk '{printf "%sx%s ", $2, $1}' | sed 's/ $//')
+  [ -n "$val" ] || val=niente
+  if [ "$val" = "$2" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$etichetta" "$val"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$etichetta" "$2" "$val"; KO=$((KO+1)); fi
+  rm -rf "$T"
+}
+for o in amend amend-m commit-C commit-c cherry-pick revert squash merge-m a-mano; do
+  eredita_prova "$o" qa-testx1
+done
+# fuori da Claude Code un amend non tocca la firma che c'e'
+eredita_prova amend devopsx1 no
+
+echo; echo "Secondo strato — il diniego dice a una persona cosa fare (! ha CLAUDECODE=1)"
+T=$(mktemp -d); ( unset CLAUDECODE CANTIERE_AGENT; git init -q -b main "$T" && cd "$T" && git config user.email p@p.invalid \
+  && git config user.name p && mkdir githooks && cp "$(trova_githook)" "$(dirname "$(trova_githook)")/ruoli" githooks/ \
+  && chmod +x githooks/prepare-commit-msg && git config core.hooksPath githooks && echo a > a && git add -A ) >/dev/null 2>&1
+out=$(env -u CANTIERE_AGENT CLAUDECODE=1 git -C "$T" commit -qm x 2>&1)
+case "$out" in
+  *"COMMIT NEGATO"*"Se sei una persona, committa da un terminale fuori da Claude Code: anche i comandi dati con ! hanno CLAUDECODE=1"*"non si scrive a mano"*)
+     printf "  ${V}ok${N}    %-52s %s\n" "senza ruolo: il messaggio nomina il caso del !" "testo presente"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s %s\n" "senza ruolo: il messaggio nomina il caso del !" "testo assente"; KO=$((KO+1)) ;;
+esac
+rm -rf "$T"
 
 echo; echo "Avviso di main indietro — SessionStart, senza modificare niente"
 # "Non modifica niente": stesso commit su main, stesso ramo, nessun file tracciato

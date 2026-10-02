@@ -29,8 +29,15 @@
 # anche con --no-verify e sui merge (provato con git 2.43; githooks(5) nomina
 # --no-verify solo per pre-commit, pre-merge-commit e commit-msg).
 #
-# 02/10 — dalla review della PR: il valore deve essere un nome su una riga sola, e
-# una firma scritta a mano nel messaggio con un altro ruolo e' negata.
+# 02/10 — dalla review della PR e dalle decisioni di Andrea:
+# - il valore deve essere un nome su una riga sola;
+# - in sessione ogni firma gia' presente nel messaggio viene sostituita da quella del
+#   ruolo corrente. Misurato con git 2.43: l'hook gira con sorgente «commit» per
+#   --amend, -c e -C, «message» per cherry-pick e revert, «squash» dopo merge
+#   --squash; NON gira su rebase, che conserva le firme dei commit riscritti;
+# - anche i comandi dati con ! dentro Claude Code hanno CLAUDECODE=1 (misurato da
+#   Andrea: `! env | grep CLAUDECODE` -> CLAUDECODE=1). Si lascia cosi': una persona
+#   committa da un terminale fuori da Claude Code, e il diniego lo dice.
 #
 # Limiti: CLAUDECODE lo dichiara Claude Code, e un comando puo' toglierlo; senza
 # plugin un agente puo' ancora dichiararsi da solo un ruolo valido, e da qui non si
@@ -54,7 +61,7 @@ nega() {
 }
 
 if [ "${CLAUDECODE:-}" = "1" ]; then
-  [ -n "$AGENTE" ] || nega "sessione Claude Code senza CANTIERE_AGENT: il commit uscirebbe senza firma."
+  [ -n "$AGENTE" ] || nega "sessione Claude Code senza CANTIERE_AGENT: il commit uscirebbe senza firma. Se sei una persona, committa da un terminale fuori da Claude Code: anche i comandi dati con ! hanno CLAUDECODE=1."
   # una riga sola, solo un nome: grep -x con un valore su piu' righe le prova tutte
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || nega "CANTIERE_AGENT non e' un nome di ruolo."
   [ -r "$RUOLI" ] || nega "manca l'elenco dei ruoli ($RUOLI): non posso verificare «$AGENTE»."
@@ -67,17 +74,20 @@ else
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
 fi
 
-# se la firma c'e' gia' (rebase, amend), non duplicarla. Ma in sessione una firma
-# scritta nel messaggio (-m, -F, editor) con un altro ruolo e' un'autodichiarazione:
-# negata. Resta quella ereditata da un commit esistente (--amend, -c, -C, merge).
-if grep -q '^Cantiere-Agent:' "$MSG_FILE"; then
-  if [ "${CLAUDECODE:-}" = "1" ]; then
-    case "$SORGENTE" in commit|merge|squash) : ;; *)
-      grep '^Cantiere-Agent:' "$MSG_FILE" | grep -qvxF -- "Cantiere-Agent: $AGENTE" \
-        && nega "il messaggio porta una firma Cantiere-Agent scritta a mano, diversa da «$AGENTE»." ;;
-    esac
-  fi
-  exit 0
+if [ "${CLAUDECODE:-}" = "1" ]; then
+  # La firma dice chi ha fatto QUESTO commit: una firma gia' nel messaggio (ereditata
+  # da --amend, -c, -C, cherry-pick, revert, squash, o scritta a mano) si toglie, e
+  # sotto si rimette quella del ruolo corrente. Ne resta una sola.
+  python3 - "$MSG_FILE" <<'PY_EOF'
+import re, sys
+f = sys.argv[1]
+righe = open(f, encoding="utf-8", errors="replace").read().split("\n")
+firma = re.compile(r"\s*(Cantiere-Agent:|Co-Authored-By: cantiere-\S+ <\S+@cantiere\.invalid>)")
+open(f, "w", encoding="utf-8").write("\n".join(r for r in righe if not firma.match(r)))
+PY_EOF
+else
+  # fuori da Claude Code: se la firma c'e' gia' (amend), non duplicarla
+  grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
 fi
 
 # git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
