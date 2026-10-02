@@ -202,6 +202,46 @@ perimetro_prova "<<'X' dentro un commento non e' un heredoc"  "true # <<'X'
 cat $HOME/fuori.txt
 X" deny
 
+# cat da solo dentro una $(...): testo solo se la $(...) e' il valore di un'opzione di
+# testo di gh o git. Altrove decide chi la consuma, e sarebbe un elenco aperto.
+perimetro_prova "git commit -m \"\$(cat <<'EOF' ...)\""        "git commit -m \"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "gh ... --body=\"\$(cat <<'EOF' ...)\""        "gh pr create --title t --body=\"\$(cat <<'EOF'
+il collaudo gira in $HOME/fuori.txt e basta
+EOF
+)\"" pass
+perimetro_prova "bash -c \"\$(cat <<'EOF' ...)\""              "bash -c \"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "eval \"\$(cat <<'EOF' ...)\""                 "eval \"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "gh ...; bash -c \"\$(cat <<'EOF' ...)\""      "gh pr list --title t; bash -c \"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "python3 -m \"\$(...)\": -m di testo, ma non di gh"  "python3 -m \"\$(cat <<'EOF'
+$HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "gh su una riga, python3 -m sulla successiva" "gh pr list
+python3 -m \"\$(cat <<'EOF'
+$HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "gh -F \"\$(cat <<'EOF' ...)\": -F non e' testo" "gh pr create --title t -F \"\$(cat <<'EOF'
+$HOME/fuori.txt
+EOF
+)\"" deny
+perimetro_prova "eval \"gh ... --body \\\"\$(cat <<'EOF'\\\"\""  "eval \"gh pr create --body \\\"\$(cat <<'EOF'
+cat $HOME/fuori.txt
+EOF
+)\\\"\"" deny
+
 # con un comando dell'elenco il corpo si toglierebbe: qui << non apre niente
 perimetro_prova "gh --body \"... <<'X'\": stringa, non heredoc"  "gh pr comment 1 --body \"usa <<'X' cosi\"
 cat $HOME/fuori.txt
