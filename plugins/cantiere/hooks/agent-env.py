@@ -37,6 +37,11 @@ nomina git. Ora:
   (Explore, general-purpose, ...) e' negato, e il messaggio nomina il tipo.
 L'elenco dei ruoli e' la cartella agents/ del plugin, non una copia.
 
+02/10 — correzioni dalla review della PR: il corpo di un heredoc si toglie, la
+riga che lo apre no (li' un ruolo forzato passava); il prefisso di un altro
+plugin non vale come ruolo di cantiere; la manomissione si cerca solo nei comandi
+che creano un commit, non in ogni comando che nomina git.
+
 Limiti, coperti dal secondo strato (il git hook nega un commit senza ruolo
 valido): uno script che lancia git senza nominarlo nel comando non viene
 riscritto; un'assegnazione nascosta in un heredoc dato in pasto a una shell non
@@ -60,7 +65,9 @@ def senza_prosa(cmd):
     """Toglie il testo che non viene eseguito: corpi di heredoc e argomenti
     quotati di -m/--message/--body/--title. Un messaggio di commit che cita la
     variabile non e' un'assegnazione (stessa regola di guard-paths, 23/09)."""
-    cmd = re.sub(r"<<-?\s*(['\"]?)(\w+)\1.*?\n\s*\2\b", " ", cmd, flags=re.S)
+    # del heredoc si toglie solo il CORPO: il resto della riga di apertura la shell
+    # lo esegue (`cat <<EOF | CANTIERE_AGENT=x git commit -F -`), e va guardato
+    cmd = re.sub(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*)\n.*?\n\s*\3\b", r"\1", cmd, flags=re.S)
     return re.sub(r"""(?:-m|--message|--body|--title)(?:=|\s+)("(?:\\.|[^"\\])*"|'[^']*')""",
                   " ", cmd)
 
@@ -80,7 +87,8 @@ def manomissione(cmd, ruolo):
 
 def nega(motivo):
     print(f"FIRMA: {motivo}. La firma dei commit viene dalla sessione, non si "
-          f"dichiara a mano: togli {VAR} dal comando e rilancialo cosi' com'e'.",
+          f"dichiara a mano: togli {VAR} dal comando che committa e rilancialo "
+          f"(se la variabile compare solo come testo, committa in un comando a parte).",
           file=sys.stderr)
     sys.exit(2)
 
@@ -94,15 +102,21 @@ def main():
     if not isinstance(cmd, str) or not re.search(r"\bgit\b", cmd):
         sys.exit(0)
     tipo = (d.get("agent_type") or "").strip()
-    ruolo = tipo.split(":", 1)[-1] if tipo else "orchestrator"
+    # `cantiere:qa-test` e' un ruolo di cantiere, `altro:qa-test` no: il prefisso di
+    # un altro plugin non si butta via. Un nome senza prefisso resta ammesso.
+    spazio, _, nome = tipo.rpartition(":")
+    ruolo = (nome if spazio in ("", "cantiere") else "sconosciuto") if tipo else "orchestrator"
     # solo caratteri sicuri in un nome di ruolo: nessuna iniezione nella shell
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
 
-    motivo = manomissione(cmd, ruolo)
+    # la manomissione conta solo dove nasce un commit: `git grep "CANTIERE_AGENT="`
+    # o `git log -S` nominano la variabile senza firmare niente
+    crea = CREA_COMMIT.search(senza_prosa(cmd))
+    motivo = manomissione(cmd, ruolo) if crea else None
     if motivo:
         nega(motivo)
-    if ruolo not in ruoli_validi() and CREA_COMMIT.search(senza_prosa(cmd)):
+    if ruolo not in ruoli_validi() and crea:
         print(f"FIRMA: commit negato. L'agente «{tipo or ruolo}» non e' un ruolo di "
               f"cantiere e non puo' firmare un commit o un merge. Riporta il lavoro "
               f"a chi ti ha lanciato: committa un ruolo di cantiere.", file=sys.stderr)

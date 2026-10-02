@@ -331,8 +331,17 @@ agente_prova 'variabile tolta con env -u'              ''                 'env -
 agente_prova 'variabile tolta con unset'               ''                 'unset CANTIERE_AGENT; git commit -m x' deny
 agente_prova 'forzata dentro bash -c'                  ''                 'bash -c "CANTIERE_AGENT=qa-test git commit -m x"' deny
 agente_prova 'forzata su un merge'                     ''                 'CANTIERE_AGENT=devops git merge --no-ff x' deny
+agente_prova 'forzata sulla riga che apre un heredoc'   'cantiere:qa-test' "cat <<'EOF' | CANTIERE_AGENT=orchestrator git commit -F -
+titolo
+EOF"                                                                                                              deny
+agente_prova 'git grep della variabile non e manomissione' ''             'git grep -n "CANTIERE_AGENT=" plugins' orchestrator
+agente_prova 'git log -S della variabile'              'cantiere:qa-test' 'git log -S"CANTIERE_AGENT=" --oneline' qa-test
 
 echo; echo "Primo strato — chi non e' un ruolo di cantiere non committa"
+agente_prova 'Explore: commit con heredoc in pipe'     'Explore'          "cat <<'EOF' | git commit -F -
+titolo
+EOF"                                                                                                              deny
+agente_prova 'altro plugin, nome di un ruolo vero'     'altro:qa-test'    'git commit -m x'                      deny
 agente_prova 'Explore: git commit'                     'Explore'          'git commit -m x'                      deny
 agente_prova 'general-purpose: git -C <dir> commit'    'general-purpose'  'git -C /p commit -m x'                deny
 agente_prova 'general-purpose: git merge'              'general-purpose'  'git merge --no-ff x'                  deny
@@ -369,6 +378,7 @@ hook_prova() { # CLAUDECODE(si|no), valore di CANTIERE_AGENT ('' = vuota), opera
     merge)       op=(merge -q --no-ff --no-edit lato) ;;
     merge-nv)    op=(merge -q --no-ff --no-edit --no-verify lato) ;;
     amend)       op=(commit -q --amend --no-edit) ;;
+    firma-a-mano) echo n > "$R/n"; git -C "$R" add -A; op=(commit -qm 'feat: x' -m 'Cantiere-Agent: orchestrator') ;;
   esac
   "${amb[@]}" git -C "$R" "${op[@]}" >/dev/null 2>&1; rc=$?
   if [ "$rc" -ne 0 ] && [ "$(git -C "$R" rev-parse HEAD)" = "$prima" ]; then val=negato
@@ -386,6 +396,10 @@ if command -v git >/dev/null 2>&1; then
     hook_prova si qa-test  "$o" qa-test
     hook_prova si Explore  "$o" negato
   done
+  hook_prova si $'qa-test\nqualsiasi cosa' commit negato
+  hook_prova si qa-test      firma-a-mano negato
+  hook_prova si orchestrator firma-a-mano orchestrator
+  hook_prova no ''           firma-a-mano orchestrator
   # fuori da Claude Code niente cambia: nessun diniego, i merge non si firmano, e
   # una persona che imposta la variabile ottiene il trailer che ha chiesto
   for o in commit commit-nv amend; do
@@ -431,11 +445,14 @@ sessione_prova() { # etichetta, scenario, atteso: avviso-indietro | avviso-falli
       # main (indietro) sta in una worktree collegata; il principale e' su un altro ramo
       worktree)       git switch -qc altro && git worktree add -q "$T/wt" main ;;
       altro-ramo)     git switch -qc lotto/x ;;
+      senza-timeout)  : ;;
     esac
   ) >/dev/null 2>&1
   dove="$T/principale"; [ "$2" = worktree ] && dove="$T/wt"
   prima=$(fermo "$T/principale")
-  if [ "$2" = fetch-scaduto ]; then
+  if [ "$2" = senza-timeout ]; then
+    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE CANTIERE_TIMEOUT_CMD=timeout-che-non-esiste PATH="$(dirname "$(command -v git)"):$(dirname "$(command -v python3)"):/bin" bash "$H/session-start.sh" 2>/dev/null)
+  elif [ "$2" = fetch-scaduto ]; then
     out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
   else
     out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
@@ -444,6 +461,7 @@ sessione_prova() { # etichetta, scenario, atteso: avviso-indietro | avviso-falli
   case "$out" in
     *"indietro di 2 commit rispetto a origin/main"*"git pull --ff-only"*) esito=avviso-indietro ;;
     *"il fetch di origin/main e' scaduto dopo 1 s"*"git pull --ff-only"*) esito=avviso-scaduto ;;
+    *"manca il comando timeout"*"git pull --ff-only"*)                    esito=avviso-senza-timeout ;;
     *"il fetch di origin/main e' fallito"*"git pull --ff-only"*)          esito=avviso-fallito ;;
     *ATTENZIONE*)                                                         esito=avviso-diverso ;;
     *"Cantiere attivo."*)                                                 esito=silenzio ;;
@@ -458,6 +476,7 @@ sessione_prova 'main indietro di 2 commit'               indietro       avviso-i
 sessione_prova 'main allineato'                          allineato      silenzio
 sessione_prova 'fetch fallito: lo dice'                  fetch-fallito  avviso-fallito
 sessione_prova 'fetch scaduto al limite: lo dice'       fetch-scaduto  avviso-scaduto
+sessione_prova 'manca timeout: lo dice, non «rete»'       senza-timeout  avviso-senza-timeout
 sessione_prova 'main indietro, ma in una worktree collegata' worktree     silenzio
 sessione_prova 'checkout principale su un altro ramo'    altro-ramo     silenzio
 

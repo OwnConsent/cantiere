@@ -24,7 +24,7 @@ rm -f .work/.current-agent 2>/dev/null
 C=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && rm -f "$C/cantiere-current-agent"
 
 main_indietro() {
-  local gd ramo limite esito n fonte
+  local gd ramo limite esito n fonte tempo
   # solo nel checkout principale (in una worktree collegata git-dir e common-dir
   # sono diversi), solo su main, solo se c'e' un origin da interrogare
   gd=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
@@ -34,10 +34,18 @@ main_indietro() {
   git remote get-url origin >/dev/null 2>&1 || return 0
 
   limite="${CANTIERE_FETCH_LIMITE:-6}"
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -oBatchMode=yes" \
-    timeout "$limite" git fetch --quiet origin main >/dev/null 2>&1
-  esito=$?
+  # ssh resta quello configurato dall'utente (core.sshCommand, GIT_SSH): forzare
+  # GIT_SSH_COMMAND lo scavalcava e dava un «fetch fallito» falso a ogni avvio.
+  # Senza un comando per il limite di tempo (macOS non ha timeout) il fetch non
+  # si fa, e lo si dice per quello che e'.
+  tempo=$(command -v "${CANTIERE_TIMEOUT_CMD:-timeout}" || command -v gtimeout || true)
   fonte=""
+  if [ -n "$tempo" ]; then
+    GIT_TERMINAL_PROMPT=0 "$tempo" "$limite" git fetch --quiet origin main >/dev/null 2>&1 </dev/null
+    esito=$?
+  else
+    esito=0; fonte="non ho fatto il fetch di origin/main: manca il comando timeout"
+  fi
   if [ "$esito" -eq 124 ]; then
     fonte="il fetch di origin/main e' scaduto dopo ${limite} s"
   elif [ "$esito" -ne 0 ]; then

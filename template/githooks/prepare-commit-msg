@@ -29,6 +29,9 @@
 # anche con --no-verify e sui merge (provato con git 2.43; githooks(5) nomina
 # --no-verify solo per pre-commit, pre-merge-commit e commit-msg).
 #
+# 02/10 — dalla review della PR: il valore deve essere un nome su una riga sola, e
+# una firma scritta a mano nel messaggio con un altro ruolo e' negata.
+#
 # Limiti: CLAUDECODE lo dichiara Claude Code, e un comando puo' toglierlo; senza
 # plugin un agente puo' ancora dichiararsi da solo un ruolo valido, e da qui non si
 # distingue. Un merge fast-forward non crea commit e non passa di qui.
@@ -52,6 +55,8 @@ nega() {
 
 if [ "${CLAUDECODE:-}" = "1" ]; then
   [ -n "$AGENTE" ] || nega "sessione Claude Code senza CANTIERE_AGENT: il commit uscirebbe senza firma."
+  # una riga sola, solo un nome: grep -x con un valore su piu' righe le prova tutte
+  [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || nega "CANTIERE_AGENT non e' un nome di ruolo."
   [ -r "$RUOLI" ] || nega "manca l'elenco dei ruoli ($RUOLI): non posso verificare «$AGENTE»."
   grep -v '^[[:space:]]*#' "$RUOLI" | grep -qxF -- "$AGENTE" \
     || nega "«$AGENTE» non e' un ruolo di cantiere (elenco: githooks/ruoli)."
@@ -62,8 +67,18 @@ else
   [[ "$AGENTE" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || exit 0
 fi
 
-# se la firma c'e' gia' (rebase, amend), non duplicarla
-grep -q '^Cantiere-Agent:' "$MSG_FILE" && exit 0
+# se la firma c'e' gia' (rebase, amend), non duplicarla. Ma in sessione una firma
+# scritta nel messaggio (-m, -F, editor) con un altro ruolo e' un'autodichiarazione:
+# negata. Resta quella ereditata da un commit esistente (--amend, -c, -C, merge).
+if grep -q '^Cantiere-Agent:' "$MSG_FILE"; then
+  if [ "${CLAUDECODE:-}" = "1" ]; then
+    case "$SORGENTE" in commit|merge|squash) : ;; *)
+      grep '^Cantiere-Agent:' "$MSG_FILE" | grep -qvxF -- "Cantiere-Agent: $AGENTE" \
+        && nega "il messaggio porta una firma Cantiere-Agent scritta a mano, diversa da «$AGENTE»." ;;
+    esac
+  fi
+  exit 0
+fi
 
 # git riconosce i trailer solo nell'ULTIMO paragrafo, separato da UNA riga vuota:
 # con zero li legge come corpo, con due come paragrafo a se' (commit d5e8331, 13/09).
