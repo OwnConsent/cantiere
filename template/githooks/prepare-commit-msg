@@ -56,7 +56,18 @@
 #   riga di prosa «Cantiere-Agent: ...» nell'ultimo paragrafo spariva in sessione, e
 #   fuori faceva uscire l'hook senza firmare;
 # - i nomi in githooks/ruoli si leggono senza spazi in testa e in coda.
+# 02/10 — dalla review della PR 17:
+# - `git interpret-trailers --parse` gira ISOLATO dalla configurazione (cartella /,
+#   niente config globale, di sistema o di riga di comando). Con un alias
+#   trailer.<x>.key nel repository git restituisce la chiave riscritta
+#   («Co-authored-by», o un nome del tutto diverso) e la firma vecchia non veniva
+#   piu' riconosciuta: dopo un amend restavano due co-autori cantiere. Misurato con
+#   git 2.43: isolato, le chiavi tornano come sono scritte nel messaggio;
+# - se il commit e' negato durante un rebase, il diniego dice come annullarlo.
 # Limiti noti, lasciati cosi':
+# - in sessione un rebase senza ruolo valido (`! git rebase main`, uno script che
+#   fa `git pull --rebase` senza nominare git) si ferma al primo commit riapplicato
+#   e resta a meta': va annullato con `git rebase --abort`;
 # - una cartella di rebase fabbricata a mano CON un ruolo valido fa uscire il commit
 #   senza firma: e' una falsificazione deliberata, come togliere CLAUDECODE;
 # - un messaggio a paragrafo singolo fatto solo di trailer («Reviewed-by: x» senza
@@ -101,6 +112,7 @@ in_rebase() {
 
 nega() {
   printf 'COMMIT NEGATO: %s\n' "$1" >&2
+  in_rebase && printf 'C'"'"'e'"'"' un rebase in corso: per annullarlo, git rebase --abort. Se sei una persona, rifallo da un terminale fuori da Claude Code.\n' >&2
   printf 'La firma la mette il plugin cantiere (hook agent-env.py), ricavando il ruolo dalla sessione: non si scrive a mano. Se manca, il plugin non e'"'"' attivo in questa sessione o il ruolo non e'"'"' ricavabile. Fermati e riportalo ad Andrea.\n' >&2
   exit 1
 }
@@ -175,11 +187,17 @@ paragrafo = testa[inizio:]
 # e' un blocco di trailer se lo dice git: riconosce anche i trailer ripiegati su piu'
 # righe e «(cherry picked from commit ...)», che una regola scritta qui perdeva.
 # Restituisce i trailer che git vede nel paragrafo, «Chiave: valore» su una riga.
+# Isolato dalla configurazione: un alias trailer.<x>.key riscrive le chiavi in uscita,
+# e qui servono come sono scritte nel messaggio.
+isolato = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG") and k not in ("GIT_DIR", "GIT_WORK_TREE")}
+isolato.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 def trailer_di(par):
     if inizio == 0 or not par:
         return []
     visti = subprocess.run(["git", "interpret-trailers", "--parse"], capture_output=True,
-                           text=True, input="oggetto\n\n" + "\n".join(par) + "\n")
+                           text=True, input="oggetto\n\n" + "\n".join(par) + "\n",
+                           cwd="/", env=isolato)
     return [t for t in visti.stdout.split("\n") if t.strip()] if visti.returncode == 0 else []
 # una riga del paragrafo e' un trailer se git l'ha restituita: stessa chiave e
 # stesso inizio del valore (git normalizza «chiave:valore» e unisce le righe ripiegate)
