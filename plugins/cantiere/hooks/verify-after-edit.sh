@@ -1,9 +1,26 @@
 #!/usr/bin/env bash
 # PostToolUse su Edit|Write. Formatta e verifica solo il file toccato.
 # Exit 2 rimanda l'errore all'agente, che corregge senza che tu intervenga.
+#
+# 03/10 — e' un hook INFORMATIVO: aiuta l'agente a correggersi, non protegge niente.
+# Se si rompe non blocca, ma lo dice nel contesto: additionalContext di PostToolUse
+# con uscita 0 arriva all'agente (misurato con Claude Code 2.1.288), mentre un'uscita
+# 1 o 127 non arriva a nessuno. Prima, senza python3 o con un payload che non si
+# legge, usciva con 0 senza avere verificato niente. Gli strumenti di un linguaggio
+# assenti (gofmt, ruff, npx, ...) restano un salto silenzioso voluto: un progetto
+# non li ha tutti.
 set -uo pipefail
+guasto() { # messaggi costanti senza virgolette: entrano in un JSON cosi' come sono
+  printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"hook informativo in errore: verify-after-edit: %s. Il file appena scritto NON e stato formattato ne verificato: dillo ad Andrea."}}\n' "$1"
+  exit 0
+}
+command -v python3 >/dev/null 2>&1 || guasto "python3 non e nel PATH"
 INPUT=$(cat)
-FILE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null || echo "")
+FILE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
+v = json.load(sys.stdin)["tool_input"]["file_path"]
+if not isinstance(v, str) or not v.strip(): sys.exit(1)
+print(v)' 2>/dev/null) \
+  || guasto "il payload non e JSON valido o manca tool_input.file_path"
 [ -f "$FILE" ] || exit 0
 OUT=""; RC=0
 case "$FILE" in
