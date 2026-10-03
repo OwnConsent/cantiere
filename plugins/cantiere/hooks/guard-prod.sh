@@ -12,7 +12,13 @@
 # non riesce a leggere il comando non lo ha esaminato, quindi nega.
 set -uo pipefail
 rotto() { echo "gate in errore: guard-prod: $1: comando non esaminato, quindi negato. Riportalo ad Andrea invece di aggirarlo." >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || rotto "python3 non e' nel PATH"
+# Comandi esterni (review della PR 19). Se uno manca dal PATH il valore che doveva
+# produrre resta vuoto, e in questi script un valore vuoto vale «passa»: senza sed
+# l'elenco dei segmenti era vuoto e `git push origin main` passava.
+# Si controllano tutti prima di cominciare, come l'interprete.
+for c in python3 cat sed dirname sleep; do
+  command -v "$c" >/dev/null 2>&1 || rotto "comando esterno mancante: $c"
+done
 corpo() {
   INPUT=$(cat)
   CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
@@ -41,7 +47,8 @@ print(v)' 2>/dev/null) \
   # parola "main" che sta nel checkout, non nel push. Falso positivo osservato il 13/09:
   # induce a spezzare i comandi finche' il guardiano smette di lamentarsi, che e'
   # un'abitudine peggiore del problema che risolve.
-  SEGMENTI=$(printf '%s' "$CMD" | sed 's/&&/\n/g; s/||/\n/g; s/;/\n/g; s/|/\n/g')
+  SEGMENTI=$(printf '%s' "$CMD" | sed 's/&&/\n/g; s/||/\n/g; s/;/\n/g; s/|/\n/g') \
+    || rotto "sed e' uscito con $? mentre spezzavo il comando"
   while IFS= read -r seg; do
     [[ "$seg" =~ (^|[[:space:]])git[[:space:]]+push($|[[:space:]]) ]] || continue
     # il ramo di destinazione e' l'ultimo token, oppure la parte dopo i due punti

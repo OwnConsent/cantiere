@@ -15,8 +15,13 @@
 # con 0 e la scrittura passava. Ora ogni guasto nega e dice quale.
 set -uo pipefail
 rotto() { echo "gate in errore: guard-commit: $1: non so quanto lavoro non committato c'e', quindi nego la scrittura. Riportalo ad Andrea invece di aggirarlo." >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || rotto "python3 non e' nel PATH"
-command -v git >/dev/null 2>&1 || rotto "git non e' nel PATH"
+# Comandi esterni (review della PR 19). Se uno manca dal PATH il valore che doveva
+# produrre resta vuoto, e in questi script un valore vuoto vale «passa»: senza grep
+# il conteggio dei file sporchi era vuoto, valeva 0, e la scrittura passava.
+# Si controllano tutti prima di cominciare, come l'interprete.
+for c in python3 git cat dirname grep sleep; do
+  command -v "$c" >/dev/null 2>&1 || rotto "comando esterno mancante: $c"
+done
 corpo() {
   INPUT=$(cat)
   FILE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
@@ -33,6 +38,7 @@ print(v)' 2>/dev/null) \
   STATO=$(git -C "$D" status --porcelain --untracked-files=normal 2>/dev/null) \
     || rotto "git status e' uscito con $? in $D"
   N=$(printf '%s' "$STATO" | grep -c '')
+  [[ "$N" =~ ^[0-9]+$ ]] || rotto "non sono riuscito a contare i file non committati"
   if [ "${N:-0}" -ge "$SOGLIA" ]; then
     echo "COMMIT PRIMA DI CONTINUARE: in questo albero ci sono $N file modificati o nuovi non committati (soglia $SOGLIA). Committa e pusha il lavoro fatto finora sul ramo del lotto, poi riprendi. Se il tetto dei turni arriva adesso, quello che non e' committato si perde: e' successo a nove agenti su nove il 19-20/09." >&2
     exit 2

@@ -9,7 +9,13 @@
 # segreto». Ora dice che il file NON e' stato controllato.
 set -uo pipefail
 rotto() { echo "gate in errore: guard-secrets: $1: il file NON e' stato controllato per i segreti. Controllalo a mano prima di committare e riportalo ad Andrea." >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || rotto "python3 non e' nel PATH"
+# Comandi esterni (review della PR 19). Se uno manca dal PATH il valore che doveva
+# produrre resta vuoto, e in questi script un valore vuoto vale «passa»: qui grep
+# e' gia' controllato sull'uscita, gli altri no.
+# Si controllano tutti prima di cominciare, come l'interprete.
+for c in python3 cat grep dirname sleep; do
+  command -v "$c" >/dev/null 2>&1 || rotto "comando esterno mancante: $c"
+done
 corpo() {
   INPUT=$(cat)
   FILE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json

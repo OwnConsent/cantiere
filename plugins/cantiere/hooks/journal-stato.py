@@ -97,6 +97,9 @@ if __name__ == "__main__":
     # controllato niente. Ora si esce con 1 e il motivo va su stderr; chi chiama
     # decide: journal-check nega, session-start lo dice nel contesto.
     try:
+        # I percorsi sono relativi alla cartella corrente: chi chiama ci si mette.
+        # session-start gira nella cartella di avvio (misurato), journal-check ci
+        # torna con CLAUDE_PROJECT_DIR prima di chiamare.
         {"foto": foto, "esame": esame}[sys.argv[1]](sys.argv[2])
     except Exception as e:
         sys.exit(f"{type(e).__name__}: {e}")

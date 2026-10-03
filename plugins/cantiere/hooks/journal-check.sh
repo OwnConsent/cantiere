@@ -15,7 +15,7 @@
 # sessione sta continuando per un diniego di Stop (misurato: false al primo, true ai
 # tredici successivi): al secondo giro si lascia chiudere, dicendolo a chi guarda.
 set -uo pipefail
-INPUT=$(cat)
+INPUT=$(cat 2>/dev/null)
 rotto() { # i messaggi sono costanti senza virgolette: entrano in un JSON cosi' come sono
   case "$INPUT" in
     *'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
@@ -25,10 +25,25 @@ rotto() { # i messaggi sono costanti senza virgolette: entrano in un JSON cosi' 
   echo "gate in errore: journal-check: $1: il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore e perche', poi chiudi: al secondo tentativo ti lascio andare." >&2
   exit 2
 }
+# Comandi esterni (review della PR 19): se uno manca dal PATH il valore che doveva
+# produrre resta vuoto, e un valore vuoto qui vale «lascia chiudere». Si controllano
+# tutti prima di cominciare, come l'interprete.
+for c in git python3 cat dirname sleep mkdir; do
+  command -v "$c" >/dev/null 2>&1 || rotto "comando esterno mancante: $c"
+done
+# ANCORA (review della PR 19). La foto di avvio sta in .work/sessioni/ della cartella
+# in cui la sessione e' partita. Misurato con Claude Code 2.1.288: un hook gira nella
+# cartella corrente dell'agente, quindi dopo un `cd sub/` lo Stop gira in sub/ e la
+# foto, cercata con un percorso relativo, non si trovava. CLAUDE_PROJECT_DIR resta la
+# cartella di avvio in tutti i casi misurati (checkout principale, worktree, cd in una
+# sottocartella, cd in un'altra worktree); `git rev-parse --show-toplevel` no: dopo un
+# cd in un'altra worktree diventa quella. Senza la variabile (hook lanciato a mano)
+# vale la cartella corrente, come prima.
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || rotto "la cartella di progetto non esiste (CLAUDE_PROJECT_DIR)"
+fi
 corpo() {
-  command -v git >/dev/null 2>&1 || rotto "git non e nel PATH"
   git rev-parse --git-dir >/dev/null 2>&1 || exit 0
-  command -v python3 >/dev/null 2>&1 || rotto "python3 non e nel PATH"
   SID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
 v = json.load(sys.stdin)["session_id"]
 if not isinstance(v, str) or not v.strip(): sys.exit(1)

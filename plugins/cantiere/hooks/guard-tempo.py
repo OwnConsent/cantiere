@@ -120,7 +120,10 @@ def esamina(payload):
     ct = git(d, "log", "-1", "--format=%ct").strip()
     if ct.isdigit():
         riferimenti.append(int(ct))
-    avvio = inizio_sessione(d, payload.get("session_id") or "")
+    # la foto di avvio sta nella cartella in cui la sessione e' partita: su Edit e
+    # Write `d` e' la cartella del file, e li' la foto non c'e'
+    avvio = inizio_sessione(os.environ.get("CLAUDE_PROJECT_DIR") or d,
+                            payload.get("session_id") or "")
     if avvio:
         riferimenti.append(avvio)
     if not riferimenti:
