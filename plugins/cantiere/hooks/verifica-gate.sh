@@ -1222,8 +1222,9 @@ diretta   'tool_input.command mancante'                 nega-in-errore  agent-en
 diretta   'command non e una stringa'                   nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":{"command":["git","commit"]}}'
 diretta   'eccezione: tool_input non e un oggetto'      nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":"git commit"}'
 diretta   'agent_type non e una stringa'                nega-in-errore  agent-env.py '{"agent_type":["Explore"],"tool_input":{"command":"git commit -m x"}}'
-mkdir -p "$FC/plugin/hooks"; cp "$H/agent-env.py" "$FC/plugin/hooks/"      # una copia senza agents/ accanto
+mkdir -p "$FC/plugin/hooks"; cp "$H/agent-env.py" "$H/sveglia.py" "$H/hooks.json" "$FC/plugin/hooks/"   # una copia senza agents/ accanto
 out=$(printf '%s' "$P_NEGA" | python3 "$FC/plugin/hooks/agent-env.py" 2>"$FC/err"); rc=$?
+case "$(cat "$FC/err")" in *FileNotFoundError*) : ;; *) rc="$rc-senza-FileNotFoundError" ;; esac
 riporta   'eccezione: la cartella agents/ non si legge' nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
 involucro 'python3 assente dal PATH'                    nega-in-errore  agent-env.py "$P_NEGA" PATH="$NOPY"
 involucro "con l'involucro: nega come prima"            nega            agent-env.py "$P_NEGA"
@@ -1308,10 +1309,106 @@ stop 'eccezione: foto di avvio corrotta'                nega-in-errore  diretta 
 stop 'foto corrotta, secondo giro: lascia e lo dice'    lascia-e-lo-dice diretta  "$SP2"
 rm -f "$JR/.work/sessioni/FC1.json"
 stop 'foto di avvio assente'                            nega-in-errore  diretta   "$SP"
+# il diniego dice che cosa manca, perche' di solito manca, e che al secondo giro si chiude
+out=$(cd "$JR" && printf '%s' "$SP" | "$H/journal-check.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"manca la foto di avvio"*"SessionStart non e girato o si e rotto"*"al secondo tentativo ti lascio andare"*) esito=lo-dice ;;
+  *) esito=non-lo-dice ;;
+esac
+riporta 'foto assente: dice cosa manca e che poi si chiude' lo-dice "$esito" "$out"
+stop 'foto assente, secondo giro: lascia e lo dice'     lascia-e-lo-dice diretta  "$SP2"
 cp "$FC/foto" "$JR/.work/sessioni/FC1.json"
 stop 'bash assente dal PATH'                            nega-in-errore  involucro "$SP" PATH="$NOBASH"
 stop 'bash assente, secondo giro: lascia e lo dice'     lascia-e-lo-dice involucro "$SP2" PATH="$NOBASH"
 stop 'foto ripristinata: blocca di nuovo'               blocca          diretta   "$SP"
+
+echo; echo "Sveglia — un gate che non finisce nega prima che Claude Code lo termini"
+# Un hook che supera il timeout di hooks.json viene terminato e l'azione PASSA
+# (misurato). Ogni gate gira quindi sotto una sveglia piu' corta, ricavata da quel
+# timeout: sveglia.py, sveglia.sh.
+# 1) I due numeri non possono divergere: la sveglia di ogni gate e' il timeout
+#    dichiarato meno il margine, ed e' piu' corta del timeout.
+GATE="guard-paths.sh guard-prod.sh guard-tempo.py agent-env.py guard-commit.sh journal-ts.py guard-secrets.sh journal-check.sh"
+MARGINE=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sveglia; print(sveglia.MARGINE)' "$H")
+for g in $GATE; do
+  dichiarato=$(python3 - "$H/hooks.json" "$g" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+print(min(h["timeout"] for gruppi in conf["hooks"].values() for g in gruppi for h in g["hooks"]
+          if "/hooks/" + sys.argv[2] + '"' in h["command"]))
+PY_EOF
+)
+  sv=$(python3 "$H/sveglia.py" "$g" 2>&1)
+  if [ "$sv" = "$((dichiarato - MARGINE))" ] && [ "$sv" -gt 0 ] && [ "$sv" -lt "$dichiarato" ]; then esito=allineata; else esito="sveglia=$sv timeout=$dichiarato"; fi
+  riporta "$g: sveglia ${sv} s, timeout ${dichiarato} s" allineata "$esito"
+done
+# nessun gate porta un limite scritto a mano: il numero sta solo in hooks.json
+scritti=$(grep -nE 'signal\.alarm\([0-9]|setitimer\([^)]*[0-9]|(^|[^[:alnum:]_])sleep [0-9]|timeout [0-9]' \
+          "$H"/guard-*.sh "$H"/guard-*.py "$H/agent-env.py" "$H/journal-ts.py" "$H/journal-check.sh" "$H/sveglia.sh" 2>/dev/null | head -3)
+riporta 'nessun limite di tempo scritto a mano nei gate'  nessuno "${scritti:-nessuno}"
+# 2) Una copia del plugin con i timeout a 3 s: la sveglia ricavata e' di 1 s. Lo
+#    stdin resta aperto (una fifo tenuta in scrittura), cosi' il gate non finisce mai
+#    di leggere il payload: deve negare da solo, dicendo «tempo esaurito».
+SV="$FC/sveglia"; mkdir -p "$SV"; cp -r "$PLUGIN" "$SV/plugin"; HS="$SV/plugin/hooks"
+python3 - "$HS/hooks.json" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            h["timeout"] = 3
+json.dump(conf, open(sys.argv[1], "w", encoding="utf-8"))
+PY_EOF
+# Se il gate non risponde entro il timeout della copia (3 s) la prova lo termina e
+# riporta «non-scatta»: e' quello che farebbe Claude Code, lasciando passare l'azione.
+entro_il_timeout() { # file-uscita, comando...: esegue, e termina allo scadere dei 3 s
+  local out="$1" p s rc; shift
+  "$@" <&0 >"$out" 2>"$FC/err" & p=$!     # <&0: in secondo piano lo stdin sarebbe /dev/null
+  ( sleep 3; kill -KILL "$p" ) >/dev/null 2>&1 & s=$!
+  wait "$p" 2>/dev/null; rc=$?
+  kill -KILL "$s" 2>/dev/null; wait "$s" 2>/dev/null
+  [ "$rc" -ge 128 ] && return 99
+  return "$rc"
+}
+esito_sveglia() { # rc, stdout
+  local esito
+  if [ "$1" = 99 ]; then echo non-scatta; return; fi
+  esito=$(classifica "$1" "$2" "$(cat "$FC/err")")
+  case "$2$(cat "$FC/err")" in *"tempo esaurito"*) esito="$esito:tempo-esaurito" ;; esac
+  echo "$esito"
+}
+lento() { # etichetta, script, payload, [VAR=valore ...]: stdin che non si chiude
+  local lab="$1" scr="$2" pay="$3" rc; shift 3
+  mkfifo "$SV/fifo"; exec 9<>"$SV/fifo"; printf '%s' "$pay" >&9
+  entro_il_timeout "$SV/out" env "$@" "$HS/$scr" <&9; rc=$?
+  exec 9>&-; rm -f "$SV/fifo"
+  riporta "$lab" nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+}
+lento 'guard-paths: non finisce di leggere'      guard-paths.sh   "$(pl command 'cat ~/.ssh/id_rsa')"
+lento 'guard-prod: non finisce di leggere'       guard-prod.sh    "$(pl command 'gh pr merge 1')"
+lento 'guard-tempo: non finisce di leggere'      guard-tempo.py   "$(pl command 'npm test')" CLAUDE_PROJECT_DIR="$FR"
+lento 'agent-env: non finisce di leggere'        agent-env.py     "$(pl command 'git commit -m x' '{"agent_type":"Explore"}')"
+lento 'guard-commit: non finisce di leggere'     guard-commit.sh  "$(pl file_path "$FR/nuovo.txt")"
+lento 'journal-ts: non finisce di leggere'       journal-ts.py    "$VOCE"
+lento 'guard-secrets: non finisce di leggere'    guard-secrets.sh "$(pl file_path "$ESCA")"
+# journal-check legge il payload prima della sveglia (gli serve per stop_hook_active):
+# qui a non finire e' git, sostituito da uno che dorme
+mkdir -p "$SV/bin"; printf '#!/bin/sh\nexec sleep 30\n' > "$SV/bin/git"; chmod +x "$SV/bin/git"
+printf '%s' "$SP" > "$SV/sp"; printf '%s' "$SP2" > "$SV/sp2"
+(cd "$JR" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp"); rc=$?
+riporta 'journal-check: git non finisce'         nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+(cd "$JR" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp2"); rc=$?
+esito=$(esito_sveglia "$rc" "$(cat "$SV/out")"); json_valido < "$SV/out" || esito="$esito+JSON-ROTTO"
+riporta 'journal-check: secondo giro, lascia e lo dice' lascia-e-lo-dice:tempo-esaurito "$esito" "$(cat "$SV/out")"
+# un figlio rimasto vivo terrebbe aperto lo stderr dell'hook fino al timeout di Claude Code
+sleep 1; vivi=$(pgrep -f "$SV/" 2>/dev/null | wc -l | tr -d ' ')
+riporta 'dopo la sveglia non restano processi del gate' 0 "$vivi"
+# 3) hooks.json illeggibile o gate non registrato: la sveglia non parte, e si nega
+rm -f "$HS/hooks.json"
+diretta_copia() { local out rc; out=$(printf '%s' "$3" | "$HS/$2" 2>"$FC/err"); rc=$?
+  riporta "$1" nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"; }
+diretta_copia 'senza hooks.json: gate Python nega'  guard-paths.sh "$(pl command 'ls')"
+diretta_copia 'senza hooks.json: gate in shell nega' guard-prod.sh  "$(pl command 'ls')"
 
 echo; echo "Informativi — session-start (SessionStart): non blocca, ma il guasto e' nel contesto"
 # Di un SessionStart che non esce con 0 nel contesto non arriva niente (misurato):

@@ -53,7 +53,7 @@ senza pensarci è quindi aperto proprio quando è guasto.
 | `verify-after-edit.sh` | PostToolUse, Edit/Write | informativo | non blocca; lo dice nel contesto |
 | `session-start.sh` | SessionStart | informativo | non blocca; lo dice nel contesto |
 
-Due strati, e servono tutti e due:
+Due strati per i guasti, e servono tutti e due:
 
 - **dentro lo script**: payload che non è JSON, campo atteso mancante, eccezione, comando
   esterno assente diventano un diniego che comincia con `gate in errore:` e dice il motivo;
@@ -66,8 +66,17 @@ Due strati, e servono tutti e due:
 Chi aggiunge un hook decide prima se è un gate o un informativo, gli mette l'involucro
 del suo tipo e aggiunge a `verifica-gate.sh` i casi in cui si rompe.
 
-Limite noto: il **timeout**. Un hook che supera il `timeout` di `hooks.json` viene
-terminato da Claude Code insieme al suo involucro, e l'azione passa in silenzio.
+C'è un terzo strato, per il **timeout**. Un hook che supera il `timeout` di `hooks.json`
+viene terminato da Claude Code insieme al suo involucro, e l'azione passa in silenzio:
+un gate che scade è un gate che si rompe. Ogni gate gira quindi sotto una sveglia più
+corta, e allo scadere nega con `gate in errore: <hook>: tempo esaurito`. La sveglia non
+è un numero scritto nello script: `sveglia.py` la ricava dal `timeout` che `hooks.json`
+dichiara per quell'hook, meno un margine di 2 secondi. Per cambiare il limite di un gate
+si cambia il suo `timeout` in `hooks.json`, e basta.
+
+Limiti noti: se la sveglia non scatta prima del timeout (misurato portandola oltre:
+il comando parte) si torna al caso di partenza; gli hook informativi non hanno sveglia,
+e se scadono non arriva niente nel contesto.
 
 ## Il journal
 
