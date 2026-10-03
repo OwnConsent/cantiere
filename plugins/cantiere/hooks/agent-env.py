@@ -135,10 +135,17 @@ SHELL = {"sh", "bash", "zsh", "dash", "ksh"}
 
 def ruoli_validi():
     d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agents")
-    try:
-        return {f[:-3] for f in os.listdir(d) if f.endswith(".md")}
-    except OSError:
-        return set()
+    # se la cartella non si legge l'eccezione sale fino a main(), che nega dicendo
+    # perche': prima tornava un insieme vuoto e il diniego parlava di «ruolo»
+    return {f[:-3] for f in os.listdir(d) if f.endswith(".md")}
+
+def rotto(msg):
+    """Il gate non ha potuto decidere: un gate guasto nega (README del plugin,
+    «Gate e informativi»)."""
+    print(f"gate in errore: agent-env: {msg}: comando non esaminato e ruolo non "
+          f"iniettato, quindi negato. Riportalo ad Andrea invece di aggirarlo.",
+          file=sys.stderr)
+    sys.exit(2)
 
 def parole(cmd):
     """Il comando spezzato come lo spezza la shell: una stringa fra virgolette e'
@@ -154,7 +161,7 @@ def parole(cmd):
     except ValueError:            # virgolette non chiuse: si spezza sugli spazi
         return cmd.split()
 
-def esamina(cmd, ruolo, livello=0, nomina=False):
+def esamina_comando(cmd, ruolo, livello=0, nomina=False):
     """(motivo, crea): il motivo di un diniego, se il comando porta la variabile
     fuori dal readonly con env o con una shell figlia; e se crea un commit."""
     motivo, crea = None, False
@@ -186,7 +193,7 @@ def esamina(cmd, ruolo, livello=0, nomina=False):
                         if m.group(1).strip("\"'") != ruolo:
                             motivo = f"una shell figlia ({nome} -c) assegna {VAR}"
                     if livello < 3:
-                        m2, c2 = esamina(dentro, ruolo, livello + 1, nomina)
+                        m2, c2 = esamina_comando(dentro, ruolo, livello + 1, nomina)
                         motivo, crea = motivo or m2, crea or c2
                     break
         elif nome == "git":
@@ -197,16 +204,17 @@ def esamina(cmd, ruolo, livello=0, nomina=False):
                 crea = True
     return motivo, crea
 
-def main():
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
-    ti = d.get("tool_input") or {}
+def esamina(d):
+    ti = d.get("tool_input")
+    if not isinstance(ti, dict):
+        rotto("nel payload manca tool_input")
     cmd = ti.get("command")
     if not isinstance(cmd, str) or not cmd.strip():
-        sys.exit(0)
-    tipo = (d.get("agent_type") or "").strip()
+        rotto("nel payload manca tool_input.command")
+    tipo = d.get("agent_type") or ""
+    if not isinstance(tipo, str):
+        rotto("agent_type non e' una stringa")
+    tipo = tipo.strip()
     # Solo `cantiere:<ruolo>` e' un ruolo di cantiere: ne' `altro:qa-test` ne' un
     # `qa-test` senza prefisso. A chi non lo e' non si inietta mai un nome che sta
     # nell'elenco: il secondo strato lo accetterebbe.
@@ -222,7 +230,7 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", ruolo):
         ruolo = "sconosciuto"
 
-    motivo, crea = esamina(cmd, ruolo, nomina=VAR in cmd)
+    motivo, crea = esamina_comando(cmd, ruolo, nomina=VAR in cmd)
     if motivo:
         print(f"FIRMA: {motivo}, ma questa chiamata viene da «{ruolo}». La firma dei "
               f"commit viene dalla sessione, non si dichiara a mano: togli {VAR} dal "
@@ -247,6 +255,23 @@ def main():
     json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                       "updatedInput": nuovo}}, sys.stdout)
     sys.exit(0)
+
+def main():
+    # FAIL-CLOSED (03/10). Se questo hook si rompe il comando gira senza prefisso, e
+    # il secondo strato regge solo a meta'. Misurato su repo usa e getta, con questo
+    # hook saltato: un `git commit` semplice e' negato dal git hook, ma
+    # `CANTIERE_AGENT=orchestrator git commit` da qa-test esce firmato orchestrator,
+    # lo stesso da Explore esce firmato col ruolo dichiarato, e una CANTIERE_AGENT
+    # gia' nell'ambiente di Claude Code firma al posto del ruolo vero: senza il
+    # readonly l'autodichiarazione torna a valere. Quindi ogni guasto nega.
+    try:
+        d = json.load(sys.stdin)
+    except Exception as e:
+        rotto(f"il payload non e' JSON valido ({type(e).__name__})")
+    try:
+        esamina(d)
+    except Exception as e:
+        rotto(f"{type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     main()

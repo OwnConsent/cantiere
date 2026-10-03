@@ -58,7 +58,7 @@ def foto(sid):
 def esame(sid):
     p = percorso(sid)
     if not os.path.isfile(p):
-        print("0 0"); return
+        sys.exit(f"manca la foto di avvio della sessione ({p})")
     s = json.load(open(p, encoding="utf-8"))
     ora = sporchi()
     cambiati = {f for f, h in ora.items() if s["sporchi"].get(f) != h}
@@ -90,8 +90,11 @@ def esame(sid):
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in ("foto", "esame"):
         sys.exit(0)
+    # 03/10: un errore qui non si traveste piu' da «niente da dire». Prima `esame`
+    # stampava «0 0» e `foto` taceva: journal-check lasciava chiudere senza avere
+    # controllato niente. Ora si esce con 1 e il motivo va su stderr; chi chiama
+    # decide: journal-check nega, session-start lo dice nel contesto.
     try:
         {"foto": foto, "esame": esame}[sys.argv[1]](sys.argv[2])
-    except Exception:
-        if sys.argv[1] == "esame":
-            print("0 0")
+    except Exception as e:
+        sys.exit(f"{type(e).__name__}: {e}")

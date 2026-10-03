@@ -52,6 +52,16 @@ def git(d, *a):
                           capture_output=True, text=True).stdout
 
 
+def rotto(msg):
+    """Il gate non ha potuto decidere: un gate guasto nega (README del plugin,
+    «Gate e informativi»). La via d'uscita resta aperta solo se il gate arriva a
+    leggere il comando: `git commit`, `git status` e gli altri passano prima."""
+    sys.stderr.write(
+        f"gate in errore: guard-tempo: {msg}: non so da quanto non committi, quindi "
+        "nego. Riportalo ad Andrea invece di aggirarlo.\n")
+    sys.exit(2)
+
+
 def cartella(payload):
     ti = payload.get("tool_input") or {}
     f = ti.get("file_path") or ""
@@ -74,11 +84,12 @@ def inizio_sessione(d, sid):
         return None
 
 
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+def esamina(payload):
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict):
+        rotto("nel payload manca tool_input")
+    if not any(isinstance(ti.get(k), str) and ti[k].strip() for k in ("command", "file_path")):
+        rotto("nel payload non c'e' ne' tool_input.command ne' tool_input.file_path")
 
     try:
         minuti = int(os.environ.get("CANTIERE_MINUTI_COMMIT", "20"))
@@ -92,11 +103,16 @@ def main():
         sys.exit(0)
 
     d = cartella(payload)
+    if not os.path.isdir(d):
+        rotto(f"la cartella di progetto non esiste ({d})")
     if not git(d, "rev-parse", "--git-dir").strip():
         sys.exit(0)
 
-    sporchi = [r for r in git(d, "status", "--porcelain",
-                              "--untracked-files=normal").splitlines() if r.strip()]
+    stato = subprocess.run(["git", "-C", d, "status", "--porcelain",
+                            "--untracked-files=normal"], capture_output=True, text=True)
+    if stato.returncode != 0:
+        rotto(f"git status e' uscito con {stato.returncode}")
+    sporchi = [r for r in stato.stdout.splitlines() if r.strip()]
     if not sporchi:
         sys.exit(0)
 
@@ -123,6 +139,21 @@ def main():
         "Cantiere-Agent portera' il suo nome. In L14 e' successo a 4 commit su 33, "
         "e i due @frontend sono spariti da entrambi i registri.\n")
     sys.exit(2)
+
+
+def main():
+    # FAIL-CLOSED (03/10). Misurato: un payload che non e' un oggetto, un tool_input
+    # che non e' un oggetto o git assente dal PATH facevano uscire l'hook con 1, e un
+    # payload illeggibile con 0. Per Claude Code sono errori non bloccanti: il comando
+    # passava. sys.exit() solleva SystemExit e non e' un'eccezione di queste.
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as e:
+        rotto(f"il payload non e' JSON valido ({type(e).__name__})")
+    try:
+        esamina(payload)
+    except Exception as e:
+        rotto(f"{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

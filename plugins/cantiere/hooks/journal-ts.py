@@ -21,12 +21,16 @@ import os
 import sys
 
 
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+def rotto(msg):
+    """Il gate non ha potuto decidere: un gate guasto nega (README del plugin,
+    «Gate e informativi»)."""
+    sys.stderr.write(
+        f"gate in errore: journal-ts: {msg}: scrittura non esaminata, quindi negata. "
+        "Riportalo ad Andrea invece di aggirarlo.\n")
+    sys.exit(2)
 
+
+def esamina(payload):
     try:
         tolleranza = int(os.environ.get("CANTIERE_TOLLERANZA_TS", "15"))
     except ValueError:
@@ -34,14 +38,18 @@ def main():
     if tolleranza <= 0:
         sys.exit(0)
 
-    ti = payload.get("tool_input") or {}
-    percorso = (ti.get("file_path") or "").replace("\\", "/")
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict):
+        rotto("nel payload manca tool_input")
+    if not isinstance(ti.get("file_path"), str) or not ti["file_path"].strip():
+        rotto("nel payload manca tool_input.file_path")
+    percorso = ti["file_path"].replace("\\", "/")
     if "/journal/" not in f"/{percorso.lstrip('/')}" or not percorso.endswith(".json"):
         sys.exit(0)
 
     contenuto = ti.get("content")
     if not isinstance(contenuto, str):
-        sys.exit(0)
+        rotto("la scrittura e' una voce di journal ma nel payload manca tool_input.content")
     try:
         voce = json.loads(contenuto)
     except Exception:
@@ -77,6 +85,21 @@ def main():
         "fatto va nel corpo della voce: il ts dice quando hai scritto, non quando "
         "e' successo.\n")
     sys.exit(2)
+
+
+def main():
+    # FAIL-CLOSED (03/10). Il payload che non si legge usciva con 0, un tool_input o
+    # un file_path di tipo sbagliato con 1: per Claude Code la scrittura passava.
+    # Restano uscite 0 volute la voce che non e' JSON e il ts assente: li' il gate
+    # ha letto tutto e ha deciso che non e' il suo mestiere.
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as e:
+        rotto(f"il payload non e' JSON valido ({type(e).__name__})")
+    try:
+        esamina(payload)
+    except Exception as e:
+        rotto(f"{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

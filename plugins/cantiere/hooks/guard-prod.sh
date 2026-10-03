@@ -6,10 +6,19 @@
 # guardare log, pod ed eventi per capire cosa è rotto; un gate che glielo impedisce
 # non rende il sistema più sicuro, rende l'incidente più lungo.
 # Eccezione dentro l'eccezione: i segreti non si leggono comunque.
+#
+# FAIL-CLOSED (03/10). Misurato: senza python3 nel PATH, o con un payload che non si
+# legge, CMD restava vuoto e l'hook usciva con 0: `gh pr merge` passava. Un gate che
+# non riesce a leggere il comando non lo ha esaminato, quindi nega.
 set -uo pipefail
+rotto() { echo "gate in errore: guard-prod: $1: comando non esaminato, quindi negato. Riportalo ad Andrea invece di aggirarlo." >&2; exit 2; }
+command -v python3 >/dev/null 2>&1 || rotto "python3 non e' nel PATH"
 INPUT=$(cat)
-CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null || echo "")
-[ -z "$CMD" ] && exit 0
+CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
+v = json.load(sys.stdin)["tool_input"]["command"]
+if not isinstance(v, str) or not v.strip(): sys.exit(1)
+print(v)' 2>/dev/null) \
+  || rotto "il payload non e' JSON valido o manca tool_input.command"
 
 deny() { echo "GATE: $1 — questa azione richiede una persona. Prepara il cambiamento e fermati." >&2; exit 2; }
 
