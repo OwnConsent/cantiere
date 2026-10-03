@@ -32,6 +32,19 @@ print(v)' 2>/dev/null) \
   D=$(dirname "$FILE")
   while [ ! -d "$D" ] && [ "$D" != "/" ]; do D=$(dirname "$D"); done
   git -C "$D" rev-parse --git-dir >/dev/null 2>&1 || exit 0
+  # Dentro .git o in un repository bare non c'e' un albero di lavoro, quindi niente da
+  # contare: il gate non si applica. Senza questo controllo `git status` usciva con 128
+  # e ogni scrittura di .git/info/exclude o di .git/hooks/ era negata come guasto
+  # (terza review della PR 19; su main passava, perche' l'uscita vuota valeva 0).
+  # Solo «false» con uscita 0 vuol dire questo: se rev-parse fallisce qui, dopo che
+  # --git-dir ha risposto, e' un guasto e si nega.
+  DENTRO=$(git -C "$D" rev-parse --is-inside-work-tree 2>/dev/null) \
+    || rotto "git rev-parse --is-inside-work-tree e' uscito con $? in $D"
+  case "$DENTRO" in
+    true)  ;;
+    false) exit 0 ;;
+    *)     rotto "git rev-parse --is-inside-work-tree ha risposto «$DENTRO» in $D" ;;
+  esac
   SOGLIA="${CANTIERE_SOGLIA_COMMIT:-20}"
   # una soglia che non e' un numero faceva fallire il confronto, e il gate taceva
   case "$SOGLIA" in ''|*[!0-9]*) SOGLIA=20 ;; esac

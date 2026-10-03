@@ -108,6 +108,20 @@ def esamina(payload):
     if not git(d, "rev-parse", "--git-dir").strip():
         sys.exit(0)
 
+    # Dentro .git o in un repository bare non c'e' un albero di lavoro, quindi niente
+    # da contare: il gate non si applica. Senza questo controllo `git status` usciva
+    # con 128 e ogni scrittura sotto .git/ era negata come guasto (terza review della
+    # PR 19). Solo «false» con uscita 0 vuol dire questo: se rev-parse fallisce qui,
+    # dopo che --git-dir ha risposto, e' un guasto e si nega.
+    dentro = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+                            capture_output=True, text=True)
+    if dentro.returncode != 0:
+        rotto(f"git rev-parse --is-inside-work-tree e' uscito con {dentro.returncode} in {d}")
+    if dentro.stdout.strip() == "false":
+        sys.exit(0)
+    if dentro.stdout.strip() != "true":
+        rotto(f"git rev-parse --is-inside-work-tree ha risposto «{dentro.stdout.strip()}» in {d}")
+
     stato = subprocess.run(["git", "-C", d, "status", "--porcelain",
                             "--untracked-files=normal"], capture_output=True, text=True)
     if stato.returncode != 0:
