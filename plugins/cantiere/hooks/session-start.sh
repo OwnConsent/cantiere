@@ -11,13 +11,36 @@
 # il ramo ne' i file; il fetch aggiorna solo origin/main. Il fetch ha un limite di
 # tempo che sta dentro i 10 s concessi all'hook in hooks.json, e se fallisce o scade
 # l'avviso lo dice, invece di tacere.
+#
+# 03/10 — e' un hook INFORMATIVO: se si rompe non blocca niente, ma lo dice. Misurato
+# con Claude Code 2.1.288: di un SessionStart che esce con 1, 2 o 127, o che scade,
+# nel contesto non arriva niente, nemmeno quello che aveva gia' scritto su stdout.
+# Quindi qui si esce sempre con 0 e il guasto si scrive su stdout, come avviso. Prima
+# la foto falliva in silenzio (`|| true`): senza python3, con un payload che non si
+# legge o con .work non scrivibile la sessione partiva senza foto, e a valle
+# journal-check non aveva niente da confrontare e guard-tempo perdeva l'inizio.
 set -uo pipefail
 INPUT=$(cat 2>/dev/null || echo '{}')
+guasto() {
+  echo "ATTENZIONE: hook informativo in errore: session-start: $1."
+  echo "Conseguenza: $2"
+  echo "Dillo ad Andrea prima di cominciare."
+  echo
+}
 SID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
-try: print(json.load(sys.stdin).get("session_id",""))
-except Exception: print("")' 2>/dev/null)
-if [ -n "$SID" ] && git rev-parse --git-dir >/dev/null 2>&1; then
-  python3 "$(dirname "$0")/journal-stato.py" foto "$SID" 2>/dev/null || true
+v = json.load(sys.stdin)["session_id"]
+if not isinstance(v, str) or not v.strip(): sys.exit(1)
+print(v)' 2>/dev/null) || SID=""
+if ! command -v git >/dev/null 2>&1; then
+  guasto "git non e' nel PATH" "nessuna foto di avvio e nessun controllo di main; guard-commit, guard-tempo e journal-check negheranno."
+elif git rev-parse --git-dir >/dev/null 2>&1; then
+  if [ -z "$SID" ]; then
+    guasto "non ho letto session_id dal payload (python3 assente dal PATH, o payload non valido)" \
+           "nessuna foto di avvio: alla chiusura journal-check neghera' una volta dicendo che non ha potuto controllare."
+  elif ! ERR=$(python3 "$(dirname "$0")/journal-stato.py" foto "$SID" 2>&1 >/dev/null); then
+    guasto "la foto di avvio non e' stata presa (${ERR:-journal-stato.py in errore})" \
+           "alla chiusura journal-check neghera' una volta dicendo che non ha potuto controllare, e guard-tempo conta solo dall'ultimo commit."
+  fi
 fi
 # residui del marcatore di ruolo su file, abbandonato il 21/09
 rm -f .work/.current-agent 2>/dev/null

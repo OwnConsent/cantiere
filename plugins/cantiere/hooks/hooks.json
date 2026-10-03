@@ -4,23 +4,51 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-paths.sh", "timeout": 10 },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-prod.sh", "timeout": 10 },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-tempo.py", "timeout": 10 },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/agent-env.py", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-paths.sh\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-paths.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-prod.sh\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-prod.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-tempo.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-tempo.py e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agent-env.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: agent-env.py e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          }
         ]
       },
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-commit.sh", "timeout": 10 },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-tempo.py", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-commit.sh\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-commit.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-tempo.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-tempo.py e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          }
         ]
       },
       {
         "matcher": "Write",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/journal-ts.py", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/journal-ts.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: journal-ts.py e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): azione non esaminata, quindi negata. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 10
+          }
         ]
       }
     ],
@@ -28,22 +56,38 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-secrets.sh", "timeout": 20 },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/verify-after-edit.sh", "timeout": 180 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-secrets.sh\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"gate in errore: guard-secrets.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): il file appena scritto NON e' stato controllato per i segreti. Riportalo ad Andrea invece di aggirarlo.\" >&2; exit 2; }",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/verify-after-edit.sh\" || { rc=$?; [ \"$rc\" = 2 ] && exit 2; echo \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PostToolUse\\\",\\\"additionalContext\\\":\\\"hook informativo in errore: verify-after-edit.sh e uscito con $rc. Il file appena scritto NON e stato formattato ne verificato: dillo ad Andrea.\\\"}}\"; }",
+            "timeout": 180
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/journal-check.sh", "timeout": 15 }
+          {
+            "type": "command",
+            "command": "IN=$(cat); printf '%s' \"$IN\" | \"${CLAUDE_PLUGIN_ROOT}/hooks/journal-check.sh\" || { rc=$?; [ \"$rc\" = 2 ] && exit 2; s=\"${CLAUDE_CODE_SESSION_ID:-}\"; case \"$s\" in ''|*[!A-Za-z0-9_-]*) f= ;; *) f=\"${CLAUDE_PROJECT_DIR:-.}/.work/sessioni/$s.guasto-segnalato\" ;; esac; case \"$IN\" in *'\"stop_hook_active\":true'*|*'\"stop_hook_active\": true'*) [ -n \"$f\" ] && { mkdir -p \"${f%/*}\" && : > \"$f\"; } 2>/dev/null; echo \"{\\\"systemMessage\\\":\\\"gate in errore: journal-check.sh e uscito con $rc invece di decidere. Il journal di questa sessione NON e stato controllato. Gia detto una volta: lascio chiudere.\\\"}\"; exit 0 ;; esac; [ -n \"$f\" ] && [ -f \"$f\" ] && exit 0; if [ -n \"$f\" ] && { mkdir -p \"${f%/*}\" && : > \"$f\"; } 2>/dev/null; then echo \"gate in errore: journal-check.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore, poi chiudi: al secondo tentativo ti lascio andare, e in questa sessione non te lo ripeto.\" >&2; else echo \"gate in errore: journal-check.sh e' uscito con $rc invece di decidere (interprete assente dal PATH, script non eseguibile o errore non gestito): il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore, poi chiudi: al secondo tentativo ti lascio andare. Non ho potuto segnarmi di avertelo detto: lo ripetero' a ogni turno.\" >&2; fi; exit 2; }",
+            "timeout": 15
+          }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\" || echo \"ATTENZIONE: hook informativo in errore: session-start.sh e' uscito con $?. Le regole del cantiere e l'avviso di main indietro possono non essere arrivati, e la foto di avvio puo' mancare. Dillo ad Andrea prima di cominciare.\"",
+            "timeout": 10
+          }
         ]
       }
     ]

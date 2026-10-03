@@ -47,15 +47,22 @@ jobs:
       - name: hooks.json punta a file che esistono
         run: |
           python3 - <<'PY'
-          import json, os, sys
+          import json, os, re, sys
           conf = json.load(open("plugins/cantiere/hooks/hooks.json"))
           mancanti = []
           for evento, gruppi in conf["hooks"].items():
               for gruppo in gruppi:
                   for h in gruppo.get("hooks", []):
-                      p = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", "plugins/cantiere")
-                      if not os.path.isfile(p):
-                          mancanti.append(f"{evento}: {p}")
+                      # dal 03/10 il comando e' un involucro di shell attorno allo script:
+                      # "${CLAUDE_PLUGIN_ROOT}/hooks/x.sh" || { ... }. Lo script e' il
+                      # percorso fra virgolette; un comando senza, non lo si sa verificare.
+                      trovati = re.findall(r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', h["command"])
+                      if not trovati:
+                          mancanti.append(f"{evento}: nessuno script riconosciuto in: {h['command'][:60]}")
+                      for t in trovati:
+                          p = os.path.join("plugins/cantiere", t)
+                          if not os.path.isfile(p):
+                              mancanti.append(f"{evento}: {p}")
           if mancanti:
               print("hook registrati ma inesistenti:", *mancanti, sep="\n  ")
               sys.exit(1)
@@ -85,6 +92,7 @@ jobs:
 
       - name: verifica-gate
         run: |
+          python3 --version
           # La suite va eseguita DA un progetto, non dal repo del plugin, e quel
           # progetto non puo' stare sotto un prefisso di sistema: sotto /tmp il
           # perimetro non esiste e meta' delle verifiche passerebbe per il motivo
@@ -96,6 +104,30 @@ jobs:
           git config user.name ci
           # senza .cantiere-deny il livello 2 non viene verificato affatto: la suite
           # lo dichiara e va avanti. In CI lo vogliamo verificato.
+          printf 'OwnConsent/cmp\n' > .cantiere-deny
+          echo segnaposto > CLAUDE.md
+          git add -A && git commit -qm base
+          CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
+
+      # Il README del plugin dichiara Python 3.8 come minimo. Il runner ha un Python piu'
+      # recente (3.12 su ubuntu-24.04), che non vede l'uso di una funzione nata dopo:
+      # os.waitstatus_to_exitcode (3.9) e' arrivata cosi' fino alla review della PR 19,
+      # e su 3.8 avrebbe fatto negare ogni azione a ogni gate Python.
+      - name: Python minimo dichiarato
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: verifica-gate con il Python minimo
+        run: |
+          python3 --version
+          python3 --version | grep -q '^Python 3\.8\.' || { echo "python3 non e' il 3.8 dichiarato"; exit 1; }
+          grep -q 'Python 3\.8' plugins/cantiere/README.md || { echo "il README non dichiara piu' Python 3.8: allinea questo passo"; exit 1; }
+          P="$RUNNER_TEMP/progetto-prova-minimo"
+          mkdir -p "$P" && cd "$P"
+          git init -q -b main
+          git config user.email ci@cantiere.invalid
+          git config user.name ci
           printf 'OwnConsent/cmp\n' > .cantiere-deny
           echo segnaposto > CLAUDE.md
           git add -A && git commit -qm base

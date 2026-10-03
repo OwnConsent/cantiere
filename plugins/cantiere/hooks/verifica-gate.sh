@@ -470,12 +470,12 @@ echo; echo "Journal: conta il lavoro di questa sessione, non quello trovato spor
 journal_prova() { # etichetta, cosa fare dopo la foto, atteso(block|pass)
   local T r esito
   T=$(mktemp -d)
-  ( cd "$T" && git init -q -b main && git config user.email t@t.invalid && git config user.name T \
+  ( cd "$T" && export CLAUDE_PROJECT_DIR="$PWD" && git init -q -b main && git config user.email t@t.invalid && git config user.name T \
     && mkdir -p site journal && echo a > site/a.md && git add -A && git commit -qm base \
     && echo "di un'altra sessione" >> site/a.md \
     && echo '{"session_id":"PROVA"}' | bash "$H/session-start.sh" >/dev/null 2>&1 \
     && eval "$2" )
-  r=$(cd "$T" && echo '{"session_id":"PROVA"}' | bash "$H/journal-check.sh" 2>/dev/null)
+  r=$(cd "$T" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | bash "$H/journal-check.sh" 2>/dev/null)
   case "$r" in *'"block"'*) esito=block ;; *) esito=pass ;; esac
   if [ "$esito" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1)); fi
@@ -1050,11 +1050,11 @@ sessione_prova() { # etichetta, scenario, atteso: avviso-indietro | avviso-falli
   dove="$T/principale"; [ "$2" = worktree ] && dove="$T/wt"
   prima=$(fermo "$T/principale")
   if [ "$2" = senza-timeout ]; then
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE CANTIERE_TIMEOUT_CMD=timeout-che-non-esiste PATH="$(dirname "$(command -v git)"):$(dirname "$(command -v python3)"):/bin" bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE CANTIERE_TIMEOUT_CMD=timeout-che-non-esiste PATH="$(dirname "$(command -v git)"):$(dirname "$(command -v python3)"):/bin" bash "$H/session-start.sh" 2>/dev/null)
   elif [ "$2" = fetch-scaduto ]; then
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
   else
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
   fi
   dopo=$(fermo "$T/principale")
   case "$out" in
@@ -1078,6 +1078,571 @@ sessione_prova 'fetch scaduto al limite: lo dice'       fetch-scaduto  avviso-sc
 sessione_prova 'manca timeout: lo dice, non «rete»'       senza-timeout  avviso-senza-timeout
 sessione_prova 'main indietro, ma in una worktree collegata' worktree     silenzio
 sessione_prova 'checkout principale su un altro ramo'    altro-ramo     silenzio
+
+# ---------------------------------------------------------------------------------
+# 03/10 — ogni gate si chiude quando si rompe; ogni informativo che si rompe lo dice.
+# Due famiglie di prove, e servono tutte e due:
+# - DIRETTE: lo script da solo, con il guasto che puo' vedere dall'interno (payload
+#   illeggibile, campo mancante, eccezione, comando esterno assente). Qui l'involucro
+#   non c'e': se l'eccezione esce, l'uscita e' 1 e la prova fallisce.
+# - INVOLUCRO: il comando scritto in hooks.json, eseguito come lo esegue Claude Code
+#   (`/bin/sh -c`, misurato con ps dentro un hook, Claude Code 2.1.288), con
+#   l'interprete tolto dal PATH. Qui lo script non parte nemmeno: se l'involucro
+#   manca, l'uscita e' 127 e la prova fallisce.
+# Il payload di ogni prova e' uno che il gate, sano, NEGHEREBBE: cosi' «rotto e
+# uscito con 0» vuol dire che un'azione da negare sarebbe passata.
+PLUGIN="$(cd "$H/.." && pwd)"
+comando_hook() { # il comando di hooks.json che lancia questo script
+  python3 - "$H/hooks.json" "$1" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            if "/hooks/" + sys.argv[2] + '"' in h["command"] or h["command"].endswith("/hooks/" + sys.argv[2]):
+                print(h["command"]); sys.exit(0)
+sys.exit(1)
+PY_EOF
+}
+FC=$(mktemp -d)
+# Se la suite gira da dentro Claude Code, l'identificativo della sessione vera non deve
+# entrare nelle prove: journal-check lo usa per il nome del file .sollecitata.
+unset CLAUDE_CODE_SESSION_ID
+path_senza() { # una cartella con tutto il PATH tranne un comando
+  local d="$FC/senza-$1" dir f b
+  [ -d "$d" ] && { printf '%s' "$d"; return; }
+  mkdir -p "$d"
+  local IFS=:
+  for dir in $PATH; do
+    for f in "$dir"/*; do
+      b=${f##*/}
+      case "$b" in "$1"|"$1"[0-9.]*) continue ;; esac
+      [ -x "$f" ] && [ ! -e "$d/$b" ] && ln -s "$f" "$d/$b" 2>/dev/null
+    done
+  done
+  printf '%s' "$d"
+}
+pl() { python3 -c 'import sys,json
+d = {"tool_input": {sys.argv[1]: sys.argv[2]}}
+if len(sys.argv) > 3: d.update(json.loads(sys.argv[3]))
+print(json.dumps(d))' "$@"; }
+riporta() { # etichetta, atteso, ottenuto, dettaglio
+  if [ "$3" = "$2" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$3"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$2" "$3"; KO=$((KO+1))
+       [ -n "${4:-}" ] && printf "        %s\n" "${4:0:300}"; fi
+}
+classifica() { # rc, stdout, stderr -> una parola
+  case "$1" in
+    2) case "$3" in *"gate in errore: "*) echo nega-in-errore ;; *) echo nega ;; esac ;;
+    0) case "$2" in
+         *"hook informativo in errore"*) echo passa-e-lo-dice ;;
+         *'"systemMessage":"gate in errore'*) echo lascia-e-lo-dice ;;
+         "") echo passa-muto ;;
+         *) echo passa-con-uscita ;;
+       esac ;;
+    *) echo "uscita-$1" ;;
+  esac
+}
+diretta() { # etichetta, atteso, script, payload, [VAR=valore ...]
+  local lab="$1" att="$2" scr="$3" pay="$4" out rc; shift 4
+  out=$(printf '%s' "$pay" | env "$@" "$H/$scr" 2>"$FC/err"); rc=$?
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+}
+involucro() { # etichetta, atteso, script, payload, [VAR=valore ...]
+  local lab="$1" att="$2" scr="$3" pay="$4" out rc cmd; shift 4
+  cmd=$(comando_hook "$scr") || { riporta "$lab" "$att" "non-in-hooks.json"; return; }
+  out=$(printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$cmd" 2>"$FC/err"); rc=$?
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+}
+json_valido() { python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; }
+NOPY=$(path_senza python3); NOGIT=$(path_senza git); NOBASH=$(path_senza bash); NOGREP=$(path_senza grep)
+ROTTO='{"tool_input": {"command": "gh pr merge 1'
+
+# repo usa e getta: un commit vecchio e lavoro sporco (guard-tempo e guard-commit negano)
+FR="$FC/repo"; mkdir -p "$FR"; git -C "$FR" init -q -b main
+git -C "$FR" config user.email prova@cantiere.invalid; git -C "$FR" config user.name prova
+echo a > "$FR/a"; git -C "$FR" add -A
+GIT_COMMITTER_DATE='2026-01-01T00:00:00' env -u CLAUDECODE -u CANTIERE_AGENT git -C "$FR" commit -qm base >/dev/null 2>&1
+for n in $(seq 1 25); do echo x > "$FR/f$n"; done
+ESCA="$FC/esca.js"; printf 'const t = "ghp_%s";\n' "$(printf '0%.0s' $(seq 36))" > "$ESCA"
+VOCE=$(pl file_path journal/2026-10-03/x.json '{}' | python3 -c 'import sys,json
+d = json.load(sys.stdin); d["tool_input"]["content"] = json.dumps({"ts": "2026-09-01T10:00:00+02:00"}); print(json.dumps(d))')
+
+echo; echo "Fail-closed — guard-paths (PreToolUse su Bash)"
+P_NEGA=$(pl command 'cat ~/.ssh/id_rsa')
+diretta   'controllo: da sano nega'                     nega            guard-paths.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-paths.sh "$ROTTO"
+diretta   'payload vuoto'                               nega-in-errore  guard-paths.sh ''
+diretta   'tool_input.command mancante'                 nega-in-errore  guard-paths.sh '{"tool_input":{}}'
+diretta   'tool_input mancante'                         nega-in-errore  guard-paths.sh '{"session_id":"x"}'
+diretta   'eccezione: tool_input non e un oggetto'      nega-in-errore  guard-paths.sh '{"tool_input":"cat ~/.ssh/id_rsa"}'
+if [ "$(id -u)" != 0 ]; then
+  cp "$CLAUDE_PROJECT_DIR/.cantiere-deny" "$FC/deny-salvato" 2>/dev/null; : >> "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  permessi=$(stat -c %a "$CLAUDE_PROJECT_DIR/.cantiere-deny" 2>/dev/null || stat -f %Lp "$CLAUDE_PROJECT_DIR/.cantiere-deny")
+  chmod 000 "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  diretta 'eccezione: .cantiere-deny illeggibile'       nega-in-errore  guard-paths.sh "$(pl command 'ls')"
+  chmod "$permessi" "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  [ -f "$FC/deny-salvato" ] || rm -f "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+fi
+involucro 'python3 assente dal PATH'                    nega-in-errore  guard-paths.sh "$P_NEGA" PATH="$NOPY"
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-paths.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-paths.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-paths.sh "$(pl command 'ls')"
+
+echo; echo "Fail-closed — guard-prod (PreToolUse su Bash)"
+P_NEGA=$(pl command 'gh pr merge 1 --squash')
+diretta   'controllo: da sano nega'                     nega            guard-prod.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-prod.sh "$ROTTO"
+diretta   'payload vuoto'                               nega-in-errore  guard-prod.sh ''
+diretta   'tool_input.command mancante'                 nega-in-errore  guard-prod.sh '{"tool_input":{}}'
+diretta   'tool_input non e un oggetto'                 nega-in-errore  guard-prod.sh '{"tool_input":"gh pr merge 1"}'
+diretta   'command non e una stringa'                   nega-in-errore  guard-prod.sh '{"tool_input":{"command":["gh","pr","merge","1"]}}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-prod.sh "$P_NEGA" PATH="$NOPY"
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-prod.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-prod.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-prod.sh "$(pl command 'terraform plan')"
+
+echo; echo "Fail-closed — guard-tempo (PreToolUse su Bash, Edit, Write)"
+P_NEGA=$(pl command 'npm test' '{"session_id":"S"}')
+diretta   'controllo: da sano nega'                     nega            guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-tempo.py '{"tool_input": {"command": "npm te' CLAUDE_PROJECT_DIR="$FR"
+diretta   'payload vuoto'                               nega-in-errore  guard-tempo.py '' CLAUDE_PROJECT_DIR="$FR"
+diretta   'ne command ne file_path'                     nega-in-errore  guard-tempo.py '{"tool_input":{}}' CLAUDE_PROJECT_DIR="$FR"
+diretta   'tool_input mancante'                         nega-in-errore  guard-tempo.py '{"session_id":"S"}' CLAUDE_PROJECT_DIR="$FR"
+diretta   'eccezione: il payload non e un oggetto'      nega-in-errore  guard-tempo.py '[]' CLAUDE_PROJECT_DIR="$FR"
+diretta   'eccezione: git assente dal PATH'             nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR" PATH="$NOGIT"
+diretta   'cartella di progetto inesistente'            nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR/non-esiste"
+involucro 'python3 assente dal PATH'                    nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR"
+involucro "con l'involucro: la via d'uscita passa"      passa-muto      guard-tempo.py "$(pl command 'git status')" CLAUDE_PROJECT_DIR="$FR"
+
+echo; echo "Fail-closed — agent-env (PreToolUse su Bash)"
+P_NEGA=$(pl command 'git commit -m x' '{"agent_type":"Explore"}')
+diretta   'controllo: da sano nega'                     nega            agent-env.py "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input": {"command": "git comm'
+diretta   'payload vuoto'                               nega-in-errore  agent-env.py ''
+diretta   'tool_input.command mancante'                 nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":{}}'
+diretta   'command non e una stringa'                   nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":{"command":["git","commit"]}}'
+diretta   'eccezione: tool_input non e un oggetto'      nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":"git commit"}'
+diretta   'agent_type non e una stringa'                nega-in-errore  agent-env.py '{"agent_type":["Explore"],"tool_input":{"command":"git commit -m x"}}'
+mkdir -p "$FC/plugin/hooks"; cp "$H/agent-env.py" "$H/sveglia.py" "$H/hooks.json" "$FC/plugin/hooks/"   # una copia senza agents/ accanto
+out=$(printf '%s' "$P_NEGA" | python3 "$FC/plugin/hooks/agent-env.py" 2>"$FC/err"); rc=$?
+case "$(cat "$FC/err")" in *FileNotFoundError*) : ;; *) rc="$rc-senza-FileNotFoundError" ;; esac
+riporta   'eccezione: la cartella agents/ non si legge' nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+involucro 'python3 assente dal PATH'                    nega-in-errore  agent-env.py "$P_NEGA" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            agent-env.py "$P_NEGA"
+involucro "con l'involucro: senza git passa muto"       passa-muto      agent-env.py "$(pl command 'ls')"
+# l'uscita 0 con JSON deve arrivare intatta: e' il comando riscritto
+out=$(pl command 'git status' '{"agent_type":"cantiere:qa-test"}' | env CLAUDE_PLUGIN_ROOT="$PLUGIN" /bin/sh -c "$(comando_hook agent-env.py)" 2>/dev/null); rc=$?
+riporta   "con l'involucro: il JSON di uscita 0 e' intatto" "0:readonly CANTIERE_AGENT=qa-test; export CANTIERE_AGENT; git status" \
+          "$rc:$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null)"
+
+echo; echo "Fail-closed — guard-commit (PreToolUse su Edit, Write)"
+P_NEGA=$(pl file_path "$FR/nuovo.txt")
+diretta   'controllo: da sano nega'                     nega            guard-commit.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-commit.sh "{\"tool_input\":{\"file_path\":\"$FR/nu"
+diretta   'payload vuoto'                               nega-in-errore  guard-commit.sh ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  guard-commit.sh '{"tool_input":{}}'
+diretta   'tool_input non e un oggetto'                 nega-in-errore  guard-commit.sh '{"tool_input":"x"}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOPY"
+diretta   'git assente dal PATH'                        nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOGIT"
+diretta   'soglia non numerica: vale la predefinita'    nega            guard-commit.sh "$P_NEGA" CANTIERE_SOGLIA_COMMIT=venti
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-commit.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-commit.sh "$P_NEGA" CANTIERE_SOGLIA_COMMIT=500
+
+echo; echo "Fail-closed — journal-ts (PreToolUse su Write)"
+diretta   'controllo: da sano nega'                     nega            journal-ts.py "$VOCE"
+diretta   'payload JSON non valido'                     nega-in-errore  journal-ts.py '{"tool_input":{"file_path":"journal/x.json","content":"{\"ts\":\"2026-09-01'
+diretta   'payload vuoto'                               nega-in-errore  journal-ts.py ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  journal-ts.py '{"tool_input":{"content":"{}"}}'
+diretta   'voce di journal senza tool_input.content'    nega-in-errore  journal-ts.py '{"tool_input":{"file_path":"journal/x.json"}}'
+diretta   'eccezione: il payload non e un oggetto'      nega-in-errore  journal-ts.py '[]'
+diretta   'file_path non e una stringa'                 nega-in-errore  journal-ts.py '{"tool_input":{"file_path":5,"content":"{}"}}'
+involucro 'python3 assente dal PATH'                    nega-in-errore  journal-ts.py "$VOCE" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            journal-ts.py "$VOCE"
+involucro "con l'involucro: passa come prima"           passa-muto      journal-ts.py "$(pl file_path src/x.json)"
+
+echo; echo "Fail-closed — guard-secrets (PostToolUse su Edit, Write): non disfa, ma lo dice"
+P_NEGA=$(pl file_path "$ESCA")
+diretta   'controllo: da sano segnala'                  nega            guard-secrets.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-secrets.sh "{\"tool_input\":{\"file_path\":\"$ESCA\""
+diretta   'payload vuoto'                               nega-in-errore  guard-secrets.sh ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  guard-secrets.sh '{"tool_input":{}}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOPY"
+diretta   'grep assente dal PATH'                       nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOGREP"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$ESCA"
+  diretta 'file illeggibile'                            nega-in-errore  guard-secrets.sh "$P_NEGA"
+  chmod 644 "$ESCA"
+fi
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: segnala come prima"         nega            guard-secrets.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-secrets.sh "$(pl file_path "$FR/a")"
+
+echo; echo "Fail-closed — journal-check (Stop): nega una volta, al secondo giro lascia e lo dice"
+# sessione con lavoro e senza voci: da sano blocca con il JSON di decision
+JR="$FC/journal"; mkdir -p "$JR"; git -C "$JR" init -q -b main
+git -C "$JR" config user.email prova@cantiere.invalid; git -C "$JR" config user.name prova
+echo a > "$JR/a"; git -C "$JR" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$JR" commit -qm base >/dev/null 2>&1
+stop() { # etichetta, atteso, via (diretta|involucro), payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; esac
+  # quello che esce su stdout con uscita 0 deve essere JSON: se non lo e', Claude Code lo scarta
+  if [ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | json_valido; then esito="$esito+JSON-ROTTO"; fi
+  riporta "$lab" "$att" "$esito" "$(cat "$FC/err")"
+  rm -f "$JR"/.work/sessioni/*.sollecitata "$JR"/.work/sessioni/*.guasto-segnalato
+}
+SP='{"session_id":"FC1","stop_hook_active":false}'; SP2='{"session_id":"FC1","stop_hook_active":true}'
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"FC1"}' | "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$JR/src.txt"
+stop 'controllo: da sano blocca'                        blocca          diretta   "$SP"
+stop "con l'involucro: blocca come prima, JSON intatto" blocca          involucro "$SP"
+stop 'payload JSON non valido'                          nega-in-errore  diretta   '{"session_id":"FC1'
+stop 'session_id mancante'                              nega-in-errore  diretta   '{"stop_hook_active":false}'
+stop 'python3 assente dal PATH'                         nega-in-errore  diretta   "$SP" PATH="$NOPY"
+stop 'git assente dal PATH'                             nega-in-errore  diretta   "$SP" PATH="$NOGIT"
+cp "$JR/.work/sessioni/FC1.json" "$FC/foto"; echo '{rotta' > "$JR/.work/sessioni/FC1.json"
+stop 'eccezione: foto di avvio corrotta'                nega-in-errore  diretta   "$SP"
+stop 'foto corrotta, secondo giro: lascia e lo dice'    lascia-e-lo-dice diretta  "$SP2"
+rm -f "$JR/.work/sessioni/FC1.json"
+stop 'foto di avvio assente'                            nega-in-errore  diretta   "$SP"
+# il diniego dice che cosa manca, perche' di solito manca, e che al secondo giro si chiude
+out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$SP" | "$H/journal-check.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"manca la foto di avvio"*"SessionStart non e girato o si e rotto"*"al secondo tentativo ti lascio andare"*) esito=lo-dice ;;
+  *) esito=non-lo-dice ;;
+esac
+riporta 'foto assente: dice cosa manca e che poi si chiude' lo-dice "$esito" "$out"
+stop 'foto assente, secondo giro: lascia e lo dice'     lascia-e-lo-dice diretta  "$SP2"
+cp "$FC/foto" "$JR/.work/sessioni/FC1.json"
+stop 'bash assente dal PATH'                            nega-in-errore  involucro "$SP" PATH="$NOBASH"
+stop 'bash assente, secondo giro: lascia e lo dice'     lascia-e-lo-dice involucro "$SP2" PATH="$NOBASH"
+stop 'foto ripristinata: blocca di nuovo'               blocca          diretta   "$SP"
+
+echo; echo "Sveglia — un gate che non finisce nega prima che Claude Code lo termini"
+# Un hook che supera il timeout di hooks.json viene terminato e l'azione PASSA
+# (misurato). Ogni gate gira quindi sotto una sveglia piu' corta, ricavata da quel
+# timeout: sveglia.py, sveglia.sh.
+# 1) I due numeri non possono divergere: la sveglia di ogni gate e' il timeout
+#    dichiarato meno il margine, ed e' piu' corta del timeout.
+GATE="guard-paths.sh guard-prod.sh guard-tempo.py agent-env.py guard-commit.sh journal-ts.py guard-secrets.sh journal-check.sh"
+MARGINE=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sveglia; print(sveglia.MARGINE)' "$H")
+for g in $GATE; do
+  dichiarato=$(python3 - "$H/hooks.json" "$g" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+print(min(h["timeout"] for gruppi in conf["hooks"].values() for g in gruppi for h in g["hooks"]
+          if "/hooks/" + sys.argv[2] + '"' in h["command"]))
+PY_EOF
+)
+  sv=$(python3 "$H/sveglia.py" "$g" 2>&1)
+  if [ "$sv" = "$((dichiarato - MARGINE))" ] && [ "$sv" -gt 0 ] && [ "$sv" -lt "$dichiarato" ]; then esito=allineata; else esito="sveglia=$sv timeout=$dichiarato"; fi
+  riporta "$g: sveglia ${sv} s, timeout ${dichiarato} s" allineata "$esito"
+done
+# nessun gate porta un limite scritto a mano: il numero sta solo in hooks.json
+scritti=$(grep -nE 'signal\.alarm\([0-9]|setitimer\([^)]*[0-9]|(^|[^[:alnum:]_])sleep [0-9]|timeout [0-9]' \
+          "$H"/guard-*.sh "$H"/guard-*.py "$H/agent-env.py" "$H/journal-ts.py" "$H/journal-check.sh" "$H/sveglia.sh" 2>/dev/null | head -3)
+riporta 'nessun limite di tempo scritto a mano nei gate'  nessuno "${scritti:-nessuno}"
+# 2) Una copia del plugin con i timeout a 3 s: la sveglia ricavata e' di 1 s. Lo
+#    stdin resta aperto (una fifo tenuta in scrittura), cosi' il gate non finisce mai
+#    di leggere il payload: deve negare da solo, dicendo «tempo esaurito».
+SV="$FC/sveglia"; mkdir -p "$SV"; cp -r "$PLUGIN" "$SV/plugin"; HS="$SV/plugin/hooks"
+python3 - "$HS/hooks.json" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            h["timeout"] = 3
+json.dump(conf, open(sys.argv[1], "w", encoding="utf-8"))
+PY_EOF
+# Se il gate non risponde entro il timeout della copia (3 s) la prova lo termina e
+# riporta «non-scatta»: e' quello che farebbe Claude Code, lasciando passare l'azione.
+entro_il_timeout() { # file-uscita, comando...: esegue, e termina allo scadere dei 3 s
+  local out="$1" p s rc; shift
+  "$@" <&0 >"$out" 2>"$FC/err" & p=$!     # <&0: in secondo piano lo stdin sarebbe /dev/null
+  ( sleep 3; kill -KILL "$p" ) >/dev/null 2>&1 & s=$!
+  wait "$p" 2>/dev/null; rc=$?
+  kill -KILL "$s" 2>/dev/null; wait "$s" 2>/dev/null
+  [ "$rc" -ge 128 ] && return 99
+  return "$rc"
+}
+esito_sveglia() { # rc, stdout
+  local esito
+  if [ "$1" = 99 ]; then echo non-scatta; return; fi
+  esito=$(classifica "$1" "$2" "$(cat "$FC/err")")
+  case "$2$(cat "$FC/err")" in *"tempo esaurito"*) esito="$esito:tempo-esaurito" ;; esac
+  echo "$esito"
+}
+lento() { # etichetta, script, payload, [VAR=valore ...]: stdin che non si chiude
+  local lab="$1" scr="$2" pay="$3" rc; shift 3
+  mkfifo "$SV/fifo"; exec 9<>"$SV/fifo"; printf '%s' "$pay" >&9
+  entro_il_timeout "$SV/out" env "$@" "$HS/$scr" <&9; rc=$?
+  exec 9>&-; rm -f "$SV/fifo"
+  riporta "$lab" nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+}
+lento 'guard-paths: non finisce di leggere'      guard-paths.sh   "$(pl command 'cat ~/.ssh/id_rsa')"
+lento 'guard-prod: non finisce di leggere'       guard-prod.sh    "$(pl command 'gh pr merge 1')"
+lento 'guard-tempo: non finisce di leggere'      guard-tempo.py   "$(pl command 'npm test')" CLAUDE_PROJECT_DIR="$FR"
+lento 'agent-env: non finisce di leggere'        agent-env.py     "$(pl command 'git commit -m x' '{"agent_type":"Explore"}')"
+lento 'guard-commit: non finisce di leggere'     guard-commit.sh  "$(pl file_path "$FR/nuovo.txt")"
+lento 'journal-ts: non finisce di leggere'       journal-ts.py    "$VOCE"
+lento 'guard-secrets: non finisce di leggere'    guard-secrets.sh "$(pl file_path "$ESCA")"
+# journal-check legge il payload prima della sveglia (gli serve per stop_hook_active):
+# qui a non finire e' git, sostituito da uno che dorme
+mkdir -p "$SV/bin"; ln -s "$(command -v sleep)" "$SV/bin/dormi"
+printf '#!/bin/sh\nexec "%s/bin/dormi" 30\n' "$SV" > "$SV/bin/git"; chmod +x "$SV/bin/git"
+printf '%s' "$SP" > "$SV/sp"; printf '%s' "$SP2" > "$SV/sp2"
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp"); rc=$?
+riporta 'journal-check: git non finisce'         nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp2"); rc=$?
+esito=$(esito_sveglia "$rc" "$(cat "$SV/out")"); json_valido < "$SV/out" || esito="$esito+JSON-ROTTO"
+riporta 'journal-check: secondo giro, lascia e lo dice' lascia-e-lo-dice:tempo-esaurito "$esito" "$(cat "$SV/out")"
+# un figlio rimasto vivo terrebbe aperto lo stderr dell'hook fino al timeout di Claude Code
+sleep 1; vivi=$(pgrep -f "$SV/" 2>/dev/null | wc -l | tr -d ' ')
+riporta 'dopo la sveglia non restano processi del gate' 0 "$vivi"
+# Un gate Python che lancia un git piantato: allo scadere si termina il gruppo, non
+# solo il figlio. Con il solo figlio terminato il git restava orfano (review della PR 19).
+(entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" CLAUDE_PROJECT_DIR="$FR" "$HS/guard-tempo.py" < <(pl command 'npm test')); rc=$?
+riporta 'guard-tempo: git non finisce'           nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+riporta 'guard-tempo: il git piantato non resta orfano' 0 "$(pgrep -f "$SV/bin/dormi" 2>/dev/null | wc -l | tr -d ' ')"
+pkill -KILL -f "$SV/bin/dormi" 2>/dev/null
+# 3) hooks.json illeggibile o gate non registrato: la sveglia non parte, e si nega
+rm -f "$HS/hooks.json"
+diretta_copia() { local out rc; out=$(printf '%s' "$3" | "$HS/$2" 2>"$FC/err"); rc=$?
+  riporta "$1" nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"; }
+diretta_copia 'senza hooks.json: gate Python nega'  guard-paths.sh "$(pl command 'ls')"
+diretta_copia 'senza hooks.json: gate in shell nega' guard-prod.sh  "$(pl command 'ls')"
+
+echo; echo "Informativi — session-start (SessionStart): non blocca, ma il guasto e' nel contesto"
+# Di un SessionStart che non esce con 0 nel contesto non arriva niente (misurato):
+# quindi uscita 0, e il guasto su stdout.
+avvio() { # etichetta, atteso, via, payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc; shift 4
+  rm -rf "$JR/.work"
+  if [ "$via" = involucro ]; then
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env -u CLAUDECODE CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook session-start.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env -u CLAUDECODE "$@" "$H/session-start.sh" 2>"$FC/err"); rc=$?
+  fi
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "")" "$out"
+}
+avvio 'controllo: da sano non parla di guasti'          passa-con-uscita diretta   '{"session_id":"FC2"}'
+avvio "con l'involucro: come prima"                     passa-con-uscita involucro '{"session_id":"FC2"}'
+avvio 'payload JSON non valido: niente foto, lo dice'   passa-e-lo-dice  diretta   '{"session_id":"FC2'
+avvio 'session_id mancante: niente foto, lo dice'       passa-e-lo-dice  diretta   '{}'
+avvio 'python3 assente dal PATH: lo dice'               passa-e-lo-dice  diretta   '{"session_id":"FC2"}' PATH="$NOPY"
+avvio 'git assente dal PATH: lo dice'                   passa-e-lo-dice  diretta   '{"session_id":"FC2"}' PATH="$NOGIT"
+if [ "$(id -u)" != 0 ]; then
+  rm -rf "$JR/.work"; mkdir "$JR/.work"; chmod 555 "$JR/.work"
+  out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"FC2"}' | env -u CLAUDECODE "$H/session-start.sh" 2>/dev/null); rc=$?
+  riporta 'eccezione: .work non scrivibile, lo dice'    passa-e-lo-dice "$(classifica "$rc" "$out" "")" "$out"
+  chmod 755 "$JR/.work"
+fi
+avvio 'bash assente dal PATH: lo dice'                  passa-e-lo-dice  involucro '{"session_id":"FC2"}' PATH="$NOBASH"
+
+echo; echo "Informativi — verify-after-edit (PostToolUse): non blocca, ma il guasto e' nel contesto"
+# Su PostToolUse il contesto si raggiunge con additionalContext in un JSON di uscita 0
+# (misurato): un'uscita 1 o 127 non arriva a nessuno.
+verifica() { # etichetta, atteso, via, payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook verify-after-edit.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(printf '%s' "$pay" | env "$@" "$H/verify-after-edit.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "")
+  if [ "$esito" = passa-e-lo-dice ]; then
+    printf '%s' "$out" | python3 -c 'import sys,json
+assert "in errore" in json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]' 2>/dev/null || esito="$esito+JSON-ROTTO"
+  fi
+  riporta "$lab" "$att" "$esito" "$out$(cat "$FC/err")"
+}
+echo '{"a":' > "$FC/rotto.json"; echo '{"a": 1}' > "$FC/buono.json"
+verifica 'controllo: da sano rimanda il file rotto'     nega             diretta   "$(pl file_path "$FC/rotto.json")"
+verifica "con l'involucro: rimanda come prima"          nega             involucro "$(pl file_path "$FC/rotto.json")"
+verifica "con l'involucro: passa come prima"            passa-muto       involucro "$(pl file_path "$FC/buono.json")"
+verifica 'payload JSON non valido: lo dice'             passa-e-lo-dice  diretta   "{\"tool_input\":{\"file_path\":\"$FC/rotto.json\""
+verifica 'tool_input.file_path mancante: lo dice'       passa-e-lo-dice  diretta   '{"tool_input":{}}'
+verifica 'python3 assente dal PATH: lo dice'            passa-e-lo-dice  diretta   "$(pl file_path "$FC/rotto.json")" PATH="$NOPY"
+verifica 'bash assente dal PATH: lo dice'               passa-e-lo-dice  involucro "$(pl file_path "$FC/rotto.json")" PATH="$NOBASH"
+
+echo; echo "Review della PR 19 — Python 3.8, comandi esterni, cartella di lavoro"
+# 1) Il padre della sveglia non usa niente che manchi a Python 3.8, il minimo dichiarato
+#    nel README. os.waitstatus_to_exitcode esiste da 3.9: qui lo si toglie, e il padre
+#    deve restituire l'uscita del figlio senza eccezioni.
+padre() { python3 - "$H" "$1" <<'PY_EOF'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+if hasattr(os, "waitstatus_to_exitcode"):
+    del os.waitstatus_to_exitcode          # come su Python 3.8
+import sveglia
+def rotto(m):
+    print("rotto:", m); sys.exit(2)
+try:
+    sveglia.con_sveglia("guard-paths.sh", lambda: sys.exit(int(sys.argv[2])), rotto)
+except SystemExit as e:
+    print("uscita", e.code)
+except Exception as e:
+    print("eccezione", type(e).__name__)
+PY_EOF
+}
+riporta 'sveglia senza waitstatus_to_exitcode: figlio esce 0' "uscita 0" "$(padre 0)"
+riporta 'sveglia senza waitstatus_to_exitcode: figlio esce 2' "uscita 2" "$(padre 2)"
+
+# 2) Un comando esterno assente dal PATH: ogni gate in shell lo dice prima di cominciare.
+#    Prima, senza grep guard-commit contava 0 file e passava; senza sed guard-prod saltava
+#    il controllo del push su ramo protetto.
+esterno() { # etichetta-gate, comando tolto, script, payload, [VAR=valore ...]
+  local g="$1" c="$2" scr="$3" pay="$4" out rc esito; shift 4
+  out=$(printf '%s' "$pay" | env "$@" PATH="$(path_senza "$c")" "$H/$scr" 2>"$FC/err"); rc=$?
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
+  riporta "$g: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
+}
+for c in python3 cat sed dirname sleep; do
+  esterno guard-prod "$c" guard-prod.sh "$(pl command 'git push origin main')"
+done
+for c in python3 git cat dirname grep sleep; do
+  esterno guard-commit "$c" guard-commit.sh "$(pl file_path "$FR/nuovo.txt")"
+done
+for c in python3 cat grep dirname sleep; do
+  esterno guard-secrets "$c" guard-secrets.sh "$(pl file_path "$ESCA")"
+done
+# journal-check: una sessione con lavoro e senza voci, che da sano blocca
+RJ="$FC/ancora"; mkdir -p "$RJ/sub/dentro"; git -C "$RJ" init -q -b main
+git -C "$RJ" config user.email prova@cantiere.invalid; git -C "$RJ" config user.name prova
+echo a > "$RJ/a"; git -C "$RJ" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$RJ" commit -qm base >/dev/null 2>&1
+(cd "$RJ" && echo '{"session_id":"FC3"}' | env CLAUDE_PROJECT_DIR="$RJ" "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$RJ/src.txt"
+SP3='{"session_id":"FC3","stop_hook_active":false}'
+for c in git python3 cat dirname sleep mkdir; do
+  out=$(cd "$RJ" && printf '%s' "$SP3" | env CLAUDE_PROJECT_DIR="$RJ" PATH="$(path_senza "$c")" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
+  riporta "journal-check: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
+  rm -f "$RJ"/.work/sessioni/*.guasto-segnalato
+done
+
+# 4) La cartella di lavoro. Misurato con Claude Code 2.1.288: un hook gira nella
+#    cartella corrente dell'agente, e CLAUDE_PROJECT_DIR resta quella di avvio. Lo Stop
+#    lanciato da una sottocartella deve trovare la foto presa all'avvio.
+out=$(cd "$RJ/sub/dentro" && printf '%s' "$SP3" | env CLAUDE_PROJECT_DIR="$RJ" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; *) esito="$(classifica "$rc" "$out" "$(cat "$FC/err")")" ;; esac
+riporta 'Stop da una sottocartella: trova la foto e blocca' blocca "$esito" "$(cat "$FC/err")"
+riporta 'Stop da una sottocartella: nessun .work li dentro' assente "$([ -e "$RJ/sub/dentro/.work" ] && echo creato || echo assente)"
+rm -f "$RJ"/.work/sessioni/*.sollecitata
+
+# 5) Seconda review: il diniego di un gate di Stop rotto e' uno per SESSIONE, non uno
+#    per turno. Misurato: al primo Stop di un turno nuovo stop_hook_active e' di nuovo
+#    false. Una sessione senza foto di avvio, due turni.
+R2="$FC/due-turni"; mkdir -p "$R2"; git -C "$R2" init -q -b main
+git -C "$R2" config user.email prova@cantiere.invalid; git -C "$R2" config user.name prova
+echo a > "$R2/a"; git -C "$R2" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$R2" commit -qm base >/dev/null 2>&1
+turno() { # etichetta, atteso, via (diretta|involucro), stop_hook_active, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="{\"session_id\":\"FC5\",\"stop_hook_active\":$4}" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(cd "$R2" && printf '%s' "$pay" | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$R2" && printf '%s' "$pay" | env CLAUDE_PROJECT_DIR="$R2" "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"lo ripetero' a ogni turno"*) esito="$esito:ogni-turno" ;; esac
+  if [ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | json_valido; then esito="$esito+JSON-ROTTO"; fi
+  riporta "$lab" "$att" "$esito" "$(cat "$FC/err")"
+}
+turno 'senza foto, turno 1: nega'                        nega-in-errore   diretta false
+turno 'senza foto, turno 1, secondo giro: lascia'        lascia-e-lo-dice diretta true
+turno 'senza foto, turno 2: NON nega di nuovo'           passa-muto       diretta false
+turno 'senza foto, turno 3: nemmeno'                     passa-muto       diretta false
+rm -rf "$R2/.work"
+# il payload non si legge: il nome del file viene da CLAUDE_CODE_SESSION_ID
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5' | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_CODE_SESSION_ID=FC5 "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+riporta 'payload illeggibile, turno 1: nega'             nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5' | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_CODE_SESSION_ID=FC5 "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+riporta 'payload illeggibile, turno 2: NON nega di nuovo' passa-muto    "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+rm -rf "$R2/.work"
+# lo script non parte nemmeno: l'involucro fa lo stesso con CLAUDE_CODE_SESSION_ID
+turno 'involucro, bash assente, turno 1: nega'           nega-in-errore   involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+turno 'involucro, turno 1, secondo giro: lascia'         lascia-e-lo-dice involucro true  PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+turno 'involucro, turno 2: NON nega di nuovo'            passa-muto       involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+rm -rf "$R2/.work"
+# Il guasto ha il suo file, .guasto-segnalato: non deve spegnere la sollecitazione
+# normale (.sollecitata). Guasto al turno 1 (niente foto), poi la foto torna e nel
+# turno 2 c'e' lavoro senza voci: la sollecitazione normale deve scattare.
+turno 'guasto al turno 1 (niente foto): nega'            nega-in-errore   diretta false
+riporta 'il guasto si segna in .guasto-segnalato, col motivo' "manca la foto" "$(cut -c1-13 "$R2/.work/sessioni/FC5.guasto-segnalato" 2>/dev/null)"
+riporta 'il guasto non tocca .sollecitata'               assente "$([ -e "$R2/.work/sessioni/FC5.sollecitata" ] && echo creato || echo assente)"
+(cd "$R2" && echo '{"session_id":"FC5"}' | env CLAUDE_PROJECT_DIR="$R2" "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$R2/src.txt"
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5","stop_hook_active":false}' | env CLAUDE_PROJECT_DIR="$R2" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; *) esito="$(classifica "$rc" "$out" "$(cat "$FC/err")")" ;; esac
+riporta 'foto tornata, lavoro senza voci al turno 2: sollecita' blocca "$esito" "$(cat "$FC/err")"
+riporta 'la sollecitazione normale si segna in .sollecitata' creato "$([ -e "$R2/.work/sessioni/FC5.sollecitata" ] && echo creato || echo assente)"
+rm -rf "$R2/.work" "$R2/src.txt"
+# l'involucro scrive solo .guasto-segnalato
+turno 'involucro, bash assente: nega'                    nega-in-errore   involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+riporta "l'involucro scrive solo .guasto-segnalato"      "FC5.guasto-segnalato" "$(ls "$R2/.work/sessioni" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+rm -rf "$R2/.work"
+# il file non si puo' scrivere: si ricade su stop_hook_active, una volta per turno, e lo dice
+if [ "$(id -u)" != 0 ]; then
+  mkdir "$R2/.work"; chmod 555 "$R2/.work"
+  turno '.work non scrivibile, turno 1: nega e lo dice'  nega-in-errore:ogni-turno diretta false
+  turno '.work non scrivibile, secondo giro: lascia'     lascia-e-lo-dice          diretta true
+  turno '.work non scrivibile, turno 2: nega ancora'     nega-in-errore:ogni-turno diretta false
+  turno 'involucro, .work non scrivibile: nega e lo dice' nega-in-errore:ogni-turno involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+  chmod 755 "$R2/.work"
+fi
+# guard-tempo su una scrittura in sottocartella: l'inizio della sessione si legge dalla
+# foto nella cartella di avvio. Commit vecchio, sessione appena partita: non nega.
+RT="$FC/tempo"; mkdir -p "$RT/sub"; git -C "$RT" init -q -b main
+git -C "$RT" config user.email prova@cantiere.invalid; git -C "$RT" config user.name prova
+echo a > "$RT/a"; git -C "$RT" add -A
+GIT_COMMITTER_DATE='2026-01-01T00:00:00' env -u CLAUDECODE -u CANTIERE_AGENT git -C "$RT" commit -qm base >/dev/null 2>&1
+(cd "$RT" && echo '{"session_id":"FC4"}' | env CLAUDE_PROJECT_DIR="$RT" "$H/session-start.sh" >/dev/null 2>&1); echo x > "$RT/sub/nuovo"
+diretta 'guard-tempo su Write in sottocartella: vede la foto' passa-muto guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"FC4"}')" CLAUDE_PROJECT_DIR="$RT"
+diretta 'controllo: senza la foto lo stesso Write e negato'   nega       guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"ALTRA"}')" CLAUDE_PROJECT_DIR="$RT"
+
+echo; echo "Terza review — dentro .git e in un repository bare non c'e' lavoro da contare"
+# $FR ha un commit vecchio e 25 file sporchi: una scrittura normale li' e' negata da
+# entrambi i gate. Una scrittura sotto .git/ no: `git rev-parse --is-inside-work-tree`
+# risponde «false», e il gate non si applica. Prima `git status` usciva con 128 e la
+# scrittura era negata come guasto.
+mkdir -p "$FR/.git/info"
+diretta 'controllo: Write normale, guard-commit nega'       nega        guard-commit.sh "$(pl file_path "$FR/nuovo.txt")"
+diretta 'controllo: Write normale, guard-tempo nega'        nega        guard-tempo.py  "$(pl file_path "$FR/nuovo.txt")" CLAUDE_PROJECT_DIR="$FR"
+diretta 'Write su .git/info/exclude: guard-commit passa'    passa-muto  guard-commit.sh "$(pl file_path "$FR/.git/info/exclude")"
+diretta 'Write su .git/info/exclude: guard-tempo passa'     passa-muto  guard-tempo.py  "$(pl file_path "$FR/.git/info/exclude")" CLAUDE_PROJECT_DIR="$FR"
+git init -q --bare "$FC/nudo.git"
+diretta 'Write in un repository bare: guard-commit passa'   passa-muto  guard-commit.sh "$(pl file_path "$FC/nudo.git/description")"
+diretta 'Write in un repository bare: guard-tempo passa'    passa-muto  guard-tempo.py  "$(pl file_path "$FC/nudo.git/description")" CLAUDE_PROJECT_DIR="$FC/nudo.git"
+# rev-parse --is-inside-work-tree che fallisce dopo che --git-dir ha risposto: non e'
+# «non e' un repository», e' un guasto. Simulato con un git che fallisce solo li'.
+mkdir -p "$FC/gitfinto"
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --is-inside-work-tree ] && { echo "fatal: errore simulato" >&2; exit 128; }; done\nexec "%s" "$@"\n' "$(command -v git)" > "$FC/gitfinto/git"
+chmod +x "$FC/gitfinto/git"
+diretta 'rev-parse fallisce per altro: guard-commit nega'   nega-in-errore guard-commit.sh "$(pl file_path "$FR/.git/info/exclude")" PATH="$FC/gitfinto:$PATH"
+diretta 'rev-parse fallisce per altro: guard-tempo nega'    nega-in-errore guard-tempo.py  "$(pl file_path "$FR/.git/info/exclude")" CLAUDE_PROJECT_DIR="$FR" PATH="$FC/gitfinto:$PATH"
+
+echo; echo "hooks.json — ogni hook registrato ha il suo involucro"
+# Un hook aggiunto domani senza involucro torna ad aprirsi quando si rompe.
+senza=$(python3 - "$H/hooks.json" <<'PY_EOF'
+import json, re, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            c = h["command"]
+            if not re.search(r'/hooks/[\w.-]+" \|\| ', c):
+                print(c[:60])
+PY_EOF
+)
+riporta 'nessun comando di hooks.json senza «|| ...»'   nessuno "${senza:-nessuno}"
+rm -rf "$FC"
 
 echo
 if [ "$KO" -eq 0 ]; then

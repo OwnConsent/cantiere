@@ -52,6 +52,16 @@ def git(d, *a):
                           capture_output=True, text=True).stdout
 
 
+def rotto(msg):
+    """Il gate non ha potuto decidere: un gate guasto nega (README del plugin,
+    «Gate e informativi»). La via d'uscita resta aperta solo se il gate arriva a
+    leggere il comando: `git commit`, `git status` e gli altri passano prima."""
+    sys.stderr.write(
+        f"gate in errore: guard-tempo: {msg}: non so da quanto non committi, quindi "
+        "nego. Riportalo ad Andrea invece di aggirarlo.\n")
+    sys.exit(2)
+
+
 def cartella(payload):
     ti = payload.get("tool_input") or {}
     f = ti.get("file_path") or ""
@@ -74,11 +84,12 @@ def inizio_sessione(d, sid):
         return None
 
 
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+def esamina(payload):
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict):
+        rotto("nel payload manca tool_input")
+    if not any(isinstance(ti.get(k), str) and ti[k].strip() for k in ("command", "file_path")):
+        rotto("nel payload non c'e' ne' tool_input.command ne' tool_input.file_path")
 
     try:
         minuti = int(os.environ.get("CANTIERE_MINUTI_COMMIT", "20"))
@@ -92,11 +103,30 @@ def main():
         sys.exit(0)
 
     d = cartella(payload)
+    if not os.path.isdir(d):
+        rotto(f"la cartella di progetto non esiste ({d})")
     if not git(d, "rev-parse", "--git-dir").strip():
         sys.exit(0)
 
-    sporchi = [r for r in git(d, "status", "--porcelain",
-                              "--untracked-files=normal").splitlines() if r.strip()]
+    # Dentro .git o in un repository bare non c'e' un albero di lavoro, quindi niente
+    # da contare: il gate non si applica. Senza questo controllo `git status` usciva
+    # con 128 e ogni scrittura sotto .git/ era negata come guasto (terza review della
+    # PR 19). Solo «false» con uscita 0 vuol dire questo: se rev-parse fallisce qui,
+    # dopo che --git-dir ha risposto, e' un guasto e si nega.
+    dentro = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+                            capture_output=True, text=True)
+    if dentro.returncode != 0:
+        rotto(f"git rev-parse --is-inside-work-tree e' uscito con {dentro.returncode} in {d}")
+    if dentro.stdout.strip() == "false":
+        sys.exit(0)
+    if dentro.stdout.strip() != "true":
+        rotto(f"git rev-parse --is-inside-work-tree ha risposto «{dentro.stdout.strip()}» in {d}")
+
+    stato = subprocess.run(["git", "-C", d, "status", "--porcelain",
+                            "--untracked-files=normal"], capture_output=True, text=True)
+    if stato.returncode != 0:
+        rotto(f"git status e' uscito con {stato.returncode}")
+    sporchi = [r for r in stato.stdout.splitlines() if r.strip()]
     if not sporchi:
         sys.exit(0)
 
@@ -104,7 +134,10 @@ def main():
     ct = git(d, "log", "-1", "--format=%ct").strip()
     if ct.isdigit():
         riferimenti.append(int(ct))
-    avvio = inizio_sessione(d, payload.get("session_id") or "")
+    # la foto di avvio sta nella cartella in cui la sessione e' partita: su Edit e
+    # Write `d` e' la cartella del file, e li' la foto non c'e'
+    avvio = inizio_sessione(os.environ.get("CLAUDE_PROJECT_DIR") or d,
+                            payload.get("session_id") or "")
     if avvio:
         riferimenti.append(avvio)
     if not riferimenti:
@@ -123,6 +156,32 @@ def main():
         "Cantiere-Agent portera' il suo nome. In L14 e' successo a 4 commit su 33, "
         "e i due @frontend sono spariti da entrambi i registri.\n")
     sys.exit(2)
+
+
+def lavoro():
+    # FAIL-CLOSED (03/10). Misurato: un payload che non e' un oggetto, un tool_input
+    # che non e' un oggetto o git assente dal PATH facevano uscire l'hook con 1, e un
+    # payload illeggibile con 0. Per Claude Code sono errori non bloccanti: il comando
+    # passava. sys.exit() solleva SystemExit e non e' un'eccezione di queste.
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as e:
+        rotto(f"il payload non e' JSON valido ({type(e).__name__})")
+    try:
+        esamina(payload)
+    except Exception as e:
+        rotto(f"{type(e).__name__}: {e}")
+
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("guard-tempo.py", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
 
 
 if __name__ == "__main__":

@@ -119,6 +119,15 @@ def deny(msg):
     sys.exit(2)
 
 
+def rotto(msg):
+    """Il gate non ha potuto decidere. Non e' un verdetto sul comando: e' un guasto,
+    e un gate guasto nega (vedi «Gate e informativi» nel README del plugin)."""
+    sys.stderr.write(
+        f"gate in errore: guard-paths: {msg}: comando non esaminato, quindi negato. "
+        "Riportalo ad Andrea invece di aggirarlo.\n")
+    sys.exit(2)
+
+
 def fuori_perimetro(risolto, project):
     if risolto == project or risolto.startswith(project + os.sep):
         return False
@@ -492,7 +501,9 @@ def livelli_2_3(cmd, project, voci_deny, home, livello=0, valore_di_testo=False,
 def esamina(dati):
     cmd = dati.get("tool_input", {}).get("command", "")
     if not cmd.strip():
-        sys.exit(0)
+        # il matcher e' Bash: un payload senza comando non e' un comando innocuo, e' un
+        # payload che questo hook non sa leggere (03/10: usciva con 0)
+        rotto("nel payload manca tool_input.command")
 
     project = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
@@ -527,17 +538,29 @@ def esamina(dati):
     sys.exit(0)
 
 
-def main():
-    try:
-        dati = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+def lavoro():
     # FAIL-CLOSED: un'eccezione qui farebbe uscire l'hook con 1, che per Claude Code
     # e' un errore non bloccante. deny() e sys.exit() sollevano SystemExit e passano.
+    # 03/10: vale anche per il payload che non si legge, che usciva con 0.
+    try:
+        dati = json.load(sys.stdin)
+    except Exception as e:
+        rotto(f"il payload non e' JSON valido ({type(e).__name__})")
     try:
         esamina(dati)
     except Exception as e:
-        deny(f"errore del parser ({type(e).__name__}: {e}): comando non esaminato, quindi negato")
+        rotto(f"errore del parser ({type(e).__name__}: {e})")
+
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("guard-paths.sh", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
 
 
 if __name__ == "__main__":
