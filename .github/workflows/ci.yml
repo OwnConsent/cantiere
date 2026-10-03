@@ -92,6 +92,7 @@ jobs:
 
       - name: verifica-gate
         run: |
+          python3 --version
           # La suite va eseguita DA un progetto, non dal repo del plugin, e quel
           # progetto non puo' stare sotto un prefisso di sistema: sotto /tmp il
           # perimetro non esiste e meta' delle verifiche passerebbe per il motivo
@@ -103,6 +104,30 @@ jobs:
           git config user.name ci
           # senza .cantiere-deny il livello 2 non viene verificato affatto: la suite
           # lo dichiara e va avanti. In CI lo vogliamo verificato.
+          printf 'OwnConsent/cmp\n' > .cantiere-deny
+          echo segnaposto > CLAUDE.md
+          git add -A && git commit -qm base
+          CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
+
+      # Il README del plugin dichiara Python 3.8 come minimo. Il runner ha un Python piu'
+      # recente (3.12 su ubuntu-24.04), che non vede l'uso di una funzione nata dopo:
+      # os.waitstatus_to_exitcode (3.9) e' arrivata cosi' fino alla review della PR 19,
+      # e su 3.8 avrebbe fatto negare ogni azione a ogni gate Python.
+      - name: Python minimo dichiarato
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: verifica-gate con il Python minimo
+        run: |
+          python3 --version
+          python3 --version | grep -q '^Python 3\.8\.' || { echo "python3 non e' il 3.8 dichiarato"; exit 1; }
+          grep -q 'Python 3\.8' plugins/cantiere/README.md || { echo "il README non dichiara piu' Python 3.8: allinea questo passo"; exit 1; }
+          P="$RUNNER_TEMP/progetto-prova-minimo"
+          mkdir -p "$P" && cd "$P"
+          git init -q -b main
+          git config user.email ci@cantiere.invalid
+          git config user.name ci
           printf 'OwnConsent/cmp\n' > .cantiere-deny
           echo segnaposto > CLAUDE.md
           git add -A && git commit -qm base

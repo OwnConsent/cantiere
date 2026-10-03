@@ -470,12 +470,12 @@ echo; echo "Journal: conta il lavoro di questa sessione, non quello trovato spor
 journal_prova() { # etichetta, cosa fare dopo la foto, atteso(block|pass)
   local T r esito
   T=$(mktemp -d)
-  ( cd "$T" && git init -q -b main && git config user.email t@t.invalid && git config user.name T \
+  ( cd "$T" && export CLAUDE_PROJECT_DIR="$PWD" && git init -q -b main && git config user.email t@t.invalid && git config user.name T \
     && mkdir -p site journal && echo a > site/a.md && git add -A && git commit -qm base \
     && echo "di un'altra sessione" >> site/a.md \
     && echo '{"session_id":"PROVA"}' | bash "$H/session-start.sh" >/dev/null 2>&1 \
     && eval "$2" )
-  r=$(cd "$T" && echo '{"session_id":"PROVA"}' | bash "$H/journal-check.sh" 2>/dev/null)
+  r=$(cd "$T" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | bash "$H/journal-check.sh" 2>/dev/null)
   case "$r" in *'"block"'*) esito=block ;; *) esito=pass ;; esac
   if [ "$esito" = "$3" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$esito"; OK=$((OK+1))
   else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$3" "$esito"; KO=$((KO+1)); fi
@@ -1050,11 +1050,11 @@ sessione_prova() { # etichetta, scenario, atteso: avviso-indietro | avviso-falli
   dove="$T/principale"; [ "$2" = worktree ] && dove="$T/wt"
   prima=$(fermo "$T/principale")
   if [ "$2" = senza-timeout ]; then
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE CANTIERE_TIMEOUT_CMD=timeout-che-non-esiste PATH="$(dirname "$(command -v git)"):$(dirname "$(command -v python3)"):/bin" bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE CANTIERE_TIMEOUT_CMD=timeout-che-non-esiste PATH="$(dirname "$(command -v git)"):$(dirname "$(command -v python3)"):/bin" bash "$H/session-start.sh" 2>/dev/null)
   elif [ "$2" = fetch-scaduto ]; then
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE GIT_SSH_COMMAND="$T/ssh-lento" CANTIERE_FETCH_LIMITE=1 bash "$H/session-start.sh" 2>/dev/null)
   else
-    out=$(cd "$dove" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
+    out=$(cd "$dove" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"PROVA"}' | env -u CLAUDECODE bash "$H/session-start.sh" 2>/dev/null)
   fi
   dopo=$(fermo "$T/principale")
   case "$out" in
@@ -1285,9 +1285,9 @@ echo a > "$JR/a"; git -C "$JR" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -
 stop() { # etichetta, atteso, via (diretta|involucro), payload, [VAR=valore ...]
   local lab="$1" att="$2" via="$3" pay="$4" out rc esito; shift 4
   if [ "$via" = involucro ]; then
-    out=$(cd "$JR" && printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
   else
-    out=$(cd "$JR" && printf '%s' "$pay" | env "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
   fi
   esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
   case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; esac
@@ -1297,7 +1297,7 @@ stop() { # etichetta, atteso, via (diretta|involucro), payload, [VAR=valore ...]
   rm -f "$JR"/.work/sessioni/*.sollecitata
 }
 SP='{"session_id":"FC1","stop_hook_active":false}'; SP2='{"session_id":"FC1","stop_hook_active":true}'
-(cd "$JR" && echo '{"session_id":"FC1"}' | "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$JR/src.txt"
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"FC1"}' | "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$JR/src.txt"
 stop 'controllo: da sano blocca'                        blocca          diretta   "$SP"
 stop "con l'involucro: blocca come prima, JSON intatto" blocca          involucro "$SP"
 stop 'payload JSON non valido'                          nega-in-errore  diretta   '{"session_id":"FC1'
@@ -1310,7 +1310,7 @@ stop 'foto corrotta, secondo giro: lascia e lo dice'    lascia-e-lo-dice diretta
 rm -f "$JR/.work/sessioni/FC1.json"
 stop 'foto di avvio assente'                            nega-in-errore  diretta   "$SP"
 # il diniego dice che cosa manca, perche' di solito manca, e che al secondo giro si chiude
-out=$(cd "$JR" && printf '%s' "$SP" | "$H/journal-check.sh" 2>&1 >/dev/null)
+out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$SP" | "$H/journal-check.sh" 2>&1 >/dev/null)
 case "$out" in
   *"manca la foto di avvio"*"SessionStart non e girato o si e rotto"*"al secondo tentativo ti lascio andare"*) esito=lo-dice ;;
   *) esito=non-lo-dice ;;
@@ -1393,16 +1393,23 @@ lento 'journal-ts: non finisce di leggere'       journal-ts.py    "$VOCE"
 lento 'guard-secrets: non finisce di leggere'    guard-secrets.sh "$(pl file_path "$ESCA")"
 # journal-check legge il payload prima della sveglia (gli serve per stop_hook_active):
 # qui a non finire e' git, sostituito da uno che dorme
-mkdir -p "$SV/bin"; printf '#!/bin/sh\nexec sleep 30\n' > "$SV/bin/git"; chmod +x "$SV/bin/git"
+mkdir -p "$SV/bin"; ln -s "$(command -v sleep)" "$SV/bin/dormi"
+printf '#!/bin/sh\nexec "%s/bin/dormi" 30\n' "$SV" > "$SV/bin/git"; chmod +x "$SV/bin/git"
 printf '%s' "$SP" > "$SV/sp"; printf '%s' "$SP2" > "$SV/sp2"
-(cd "$JR" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp"); rc=$?
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp"); rc=$?
 riporta 'journal-check: git non finisce'         nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
-(cd "$JR" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp2"); rc=$?
+(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp2"); rc=$?
 esito=$(esito_sveglia "$rc" "$(cat "$SV/out")"); json_valido < "$SV/out" || esito="$esito+JSON-ROTTO"
 riporta 'journal-check: secondo giro, lascia e lo dice' lascia-e-lo-dice:tempo-esaurito "$esito" "$(cat "$SV/out")"
 # un figlio rimasto vivo terrebbe aperto lo stderr dell'hook fino al timeout di Claude Code
 sleep 1; vivi=$(pgrep -f "$SV/" 2>/dev/null | wc -l | tr -d ' ')
 riporta 'dopo la sveglia non restano processi del gate' 0 "$vivi"
+# Un gate Python che lancia un git piantato: allo scadere si termina il gruppo, non
+# solo il figlio. Con il solo figlio terminato il git restava orfano (review della PR 19).
+(entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" CLAUDE_PROJECT_DIR="$FR" "$HS/guard-tempo.py" < <(pl command 'npm test')); rc=$?
+riporta 'guard-tempo: git non finisce'           nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
+riporta 'guard-tempo: il git piantato non resta orfano' 0 "$(pgrep -f "$SV/bin/dormi" 2>/dev/null | wc -l | tr -d ' ')"
+pkill -KILL -f "$SV/bin/dormi" 2>/dev/null
 # 3) hooks.json illeggibile o gate non registrato: la sveglia non parte, e si nega
 rm -f "$HS/hooks.json"
 diretta_copia() { local out rc; out=$(printf '%s' "$3" | "$HS/$2" 2>"$FC/err"); rc=$?
@@ -1417,9 +1424,9 @@ avvio() { # etichetta, atteso, via, payload, [VAR=valore ...]
   local lab="$1" att="$2" via="$3" pay="$4" out rc; shift 4
   rm -rf "$JR/.work"
   if [ "$via" = involucro ]; then
-    out=$(cd "$JR" && printf '%s' "$pay" | env -u CLAUDECODE CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook session-start.sh)" 2>"$FC/err"); rc=$?
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env -u CLAUDECODE CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook session-start.sh)" 2>"$FC/err"); rc=$?
   else
-    out=$(cd "$JR" && printf '%s' "$pay" | env -u CLAUDECODE "$@" "$H/session-start.sh" 2>"$FC/err"); rc=$?
+    out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && printf '%s' "$pay" | env -u CLAUDECODE "$@" "$H/session-start.sh" 2>"$FC/err"); rc=$?
   fi
   riporta "$lab" "$att" "$(classifica "$rc" "$out" "")" "$out"
 }
@@ -1431,7 +1438,7 @@ avvio 'python3 assente dal PATH: lo dice'               passa-e-lo-dice  diretta
 avvio 'git assente dal PATH: lo dice'                   passa-e-lo-dice  diretta   '{"session_id":"FC2"}' PATH="$NOGIT"
 if [ "$(id -u)" != 0 ]; then
   rm -rf "$JR/.work"; mkdir "$JR/.work"; chmod 555 "$JR/.work"
-  out=$(cd "$JR" && echo '{"session_id":"FC2"}' | env -u CLAUDECODE "$H/session-start.sh" 2>/dev/null); rc=$?
+  out=$(cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"FC2"}' | env -u CLAUDECODE "$H/session-start.sh" 2>/dev/null); rc=$?
   riporta 'eccezione: .work non scrivibile, lo dice'    passa-e-lo-dice "$(classifica "$rc" "$out" "")" "$out"
   chmod 755 "$JR/.work"
 fi
@@ -1462,6 +1469,79 @@ verifica 'payload JSON non valido: lo dice'             passa-e-lo-dice  diretta
 verifica 'tool_input.file_path mancante: lo dice'       passa-e-lo-dice  diretta   '{"tool_input":{}}'
 verifica 'python3 assente dal PATH: lo dice'            passa-e-lo-dice  diretta   "$(pl file_path "$FC/rotto.json")" PATH="$NOPY"
 verifica 'bash assente dal PATH: lo dice'               passa-e-lo-dice  involucro "$(pl file_path "$FC/rotto.json")" PATH="$NOBASH"
+
+echo; echo "Review della PR 19 — Python 3.8, comandi esterni, cartella di lavoro"
+# 1) Il padre della sveglia non usa niente che manchi a Python 3.8, il minimo dichiarato
+#    nel README. os.waitstatus_to_exitcode esiste da 3.9: qui lo si toglie, e il padre
+#    deve restituire l'uscita del figlio senza eccezioni.
+padre() { python3 - "$H" "$1" <<'PY_EOF'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+if hasattr(os, "waitstatus_to_exitcode"):
+    del os.waitstatus_to_exitcode          # come su Python 3.8
+import sveglia
+def rotto(m):
+    print("rotto:", m); sys.exit(2)
+try:
+    sveglia.con_sveglia("guard-paths.sh", lambda: sys.exit(int(sys.argv[2])), rotto)
+except SystemExit as e:
+    print("uscita", e.code)
+except Exception as e:
+    print("eccezione", type(e).__name__)
+PY_EOF
+}
+riporta 'sveglia senza waitstatus_to_exitcode: figlio esce 0' "uscita 0" "$(padre 0)"
+riporta 'sveglia senza waitstatus_to_exitcode: figlio esce 2' "uscita 2" "$(padre 2)"
+
+# 2) Un comando esterno assente dal PATH: ogni gate in shell lo dice prima di cominciare.
+#    Prima, senza grep guard-commit contava 0 file e passava; senza sed guard-prod saltava
+#    il controllo del push su ramo protetto.
+esterno() { # etichetta-gate, comando tolto, script, payload, [VAR=valore ...]
+  local g="$1" c="$2" scr="$3" pay="$4" out rc esito; shift 4
+  out=$(printf '%s' "$pay" | env "$@" PATH="$(path_senza "$c")" "$H/$scr" 2>"$FC/err"); rc=$?
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
+  riporta "$g: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
+}
+for c in python3 cat sed dirname sleep; do
+  esterno guard-prod "$c" guard-prod.sh "$(pl command 'git push origin main')"
+done
+for c in python3 git cat dirname grep sleep; do
+  esterno guard-commit "$c" guard-commit.sh "$(pl file_path "$FR/nuovo.txt")"
+done
+for c in python3 cat grep dirname sleep; do
+  esterno guard-secrets "$c" guard-secrets.sh "$(pl file_path "$ESCA")"
+done
+# journal-check: una sessione con lavoro e senza voci, che da sano blocca
+RJ="$FC/ancora"; mkdir -p "$RJ/sub/dentro"; git -C "$RJ" init -q -b main
+git -C "$RJ" config user.email prova@cantiere.invalid; git -C "$RJ" config user.name prova
+echo a > "$RJ/a"; git -C "$RJ" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$RJ" commit -qm base >/dev/null 2>&1
+(cd "$RJ" && echo '{"session_id":"FC3"}' | env CLAUDE_PROJECT_DIR="$RJ" "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$RJ/src.txt"
+SP3='{"session_id":"FC3","stop_hook_active":false}'
+for c in git python3 cat dirname sleep mkdir; do
+  out=$(cd "$RJ" && printf '%s' "$SP3" | env CLAUDE_PROJECT_DIR="$RJ" PATH="$(path_senza "$c")" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
+  riporta "journal-check: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
+done
+
+# 4) La cartella di lavoro. Misurato con Claude Code 2.1.288: un hook gira nella
+#    cartella corrente dell'agente, e CLAUDE_PROJECT_DIR resta quella di avvio. Lo Stop
+#    lanciato da una sottocartella deve trovare la foto presa all'avvio.
+out=$(cd "$RJ/sub/dentro" && printf '%s' "$SP3" | env CLAUDE_PROJECT_DIR="$RJ" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; *) esito="$(classifica "$rc" "$out" "$(cat "$FC/err")")" ;; esac
+riporta 'Stop da una sottocartella: trova la foto e blocca' blocca "$esito" "$(cat "$FC/err")"
+riporta 'Stop da una sottocartella: nessun .work li dentro' assente "$([ -e "$RJ/sub/dentro/.work" ] && echo creato || echo assente)"
+rm -f "$RJ"/.work/sessioni/*.sollecitata
+# guard-tempo su una scrittura in sottocartella: l'inizio della sessione si legge dalla
+# foto nella cartella di avvio. Commit vecchio, sessione appena partita: non nega.
+RT="$FC/tempo"; mkdir -p "$RT/sub"; git -C "$RT" init -q -b main
+git -C "$RT" config user.email prova@cantiere.invalid; git -C "$RT" config user.name prova
+echo a > "$RT/a"; git -C "$RT" add -A
+GIT_COMMITTER_DATE='2026-01-01T00:00:00' env -u CLAUDECODE -u CANTIERE_AGENT git -C "$RT" commit -qm base >/dev/null 2>&1
+(cd "$RT" && echo '{"session_id":"FC4"}' | env CLAUDE_PROJECT_DIR="$RT" "$H/session-start.sh" >/dev/null 2>&1); echo x > "$RT/sub/nuovo"
+diretta 'guard-tempo su Write in sottocartella: vede la foto' passa-muto guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"FC4"}')" CLAUDE_PROJECT_DIR="$RT"
+diretta 'controllo: senza la foto lo stesso Write e negato'   nega       guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"ALTRA"}')" CLAUDE_PROJECT_DIR="$RT"
 
 echo; echo "hooks.json — ogni hook registrato ha il suo involucro"
 # Un hook aggiunto domani senza involucro torna ad aprirsi quando si rompe.
