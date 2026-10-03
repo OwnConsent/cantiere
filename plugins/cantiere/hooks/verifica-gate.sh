@@ -1297,7 +1297,7 @@ stop() { # etichetta, atteso, via (diretta|involucro), payload, [VAR=valore ...]
   # quello che esce su stdout con uscita 0 deve essere JSON: se non lo e', Claude Code lo scarta
   if [ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | json_valido; then esito="$esito+JSON-ROTTO"; fi
   riporta "$lab" "$att" "$esito" "$(cat "$FC/err")"
-  rm -f "$JR"/.work/sessioni/*.sollecitata
+  rm -f "$JR"/.work/sessioni/*.sollecitata "$JR"/.work/sessioni/*.guasto-segnalato
 }
 SP='{"session_id":"FC1","stop_hook_active":false}'; SP2='{"session_id":"FC1","stop_hook_active":true}'
 (cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && echo '{"session_id":"FC1"}' | "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$JR/src.txt"
@@ -1526,7 +1526,7 @@ for c in git python3 cat dirname sleep mkdir; do
   esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
   case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
   riporta "journal-check: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
-  rm -f "$RJ"/.work/sessioni/*.sollecitata
+  rm -f "$RJ"/.work/sessioni/*.guasto-segnalato
 done
 
 # 4) La cartella di lavoro. Misurato con Claude Code 2.1.288: un hook gira nella
@@ -1571,6 +1571,22 @@ rm -rf "$R2/.work"
 turno 'involucro, bash assente, turno 1: nega'           nega-in-errore   involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
 turno 'involucro, turno 1, secondo giro: lascia'         lascia-e-lo-dice involucro true  PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
 turno 'involucro, turno 2: NON nega di nuovo'            passa-muto       involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+rm -rf "$R2/.work"
+# Il guasto ha il suo file, .guasto-segnalato: non deve spegnere la sollecitazione
+# normale (.sollecitata). Guasto al turno 1 (niente foto), poi la foto torna e nel
+# turno 2 c'e' lavoro senza voci: la sollecitazione normale deve scattare.
+turno 'guasto al turno 1 (niente foto): nega'            nega-in-errore   diretta false
+riporta 'il guasto si segna in .guasto-segnalato, col motivo' "manca la foto" "$(cut -c1-13 "$R2/.work/sessioni/FC5.guasto-segnalato" 2>/dev/null)"
+riporta 'il guasto non tocca .sollecitata'               assente "$([ -e "$R2/.work/sessioni/FC5.sollecitata" ] && echo creato || echo assente)"
+(cd "$R2" && echo '{"session_id":"FC5"}' | env CLAUDE_PROJECT_DIR="$R2" "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$R2/src.txt"
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5","stop_hook_active":false}' | env CLAUDE_PROJECT_DIR="$R2" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; *) esito="$(classifica "$rc" "$out" "$(cat "$FC/err")")" ;; esac
+riporta 'foto tornata, lavoro senza voci al turno 2: sollecita' blocca "$esito" "$(cat "$FC/err")"
+riporta 'la sollecitazione normale si segna in .sollecitata' creato "$([ -e "$R2/.work/sessioni/FC5.sollecitata" ] && echo creato || echo assente)"
+rm -rf "$R2/.work" "$R2/src.txt"
+# l'involucro scrive solo .guasto-segnalato
+turno 'involucro, bash assente: nega'                    nega-in-errore   involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+riporta "l'involucro scrive solo .guasto-segnalato"      "FC5.guasto-segnalato" "$(ls "$R2/.work/sessioni" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 rm -rf "$R2/.work"
 # il file non si puo' scrivere: si ricade su stop_hook_active, una volta per turno, e lo dice
 if [ "$(id -u)" != 0 ]; then
