@@ -213,6 +213,7 @@ def percorri(s, i=0, chiusa=False, profondita=0):
             continue
         elif c == "\n":
             a_capo.append(i)
+            fine_riga = i          # i avanza a ogni corpo: la riga che li apre finisce qui
             for delim, quotato in attesi:
                 pos, fine = i + 1, None
                 while pos <= n:
@@ -224,7 +225,7 @@ def percorri(s, i=0, chiusa=False, profondita=0):
                     pos = k + 1
                 if fine is None:
                     break
-                heredoc.append({"riga": (riga, i), "corpo": (i + 1, min(fine + 1, n)),
+                heredoc.append({"riga": (riga, fine_riga), "corpo": (i + 1, min(fine + 1, n)),
                                 "quotato": quotato})
                 i = fine
             attesi = []

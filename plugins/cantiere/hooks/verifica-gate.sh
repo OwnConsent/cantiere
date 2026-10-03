@@ -292,6 +292,24 @@ cat $HOME/fuori.txt
 EOF
 )\"" deny
 
+# terza review della #18: due heredoc sulla stessa riga, e la sostituzione di processo
+perimetro_prova "gh <<A <<'B': uno non quotato, scanditi entrambi" "gh pr create -F - <<A <<'B'
+testo
+A
+il collaudo gira in $HOME/fuori.txt e basta
+B" deny
+perimetro_prova "gh <<'A' <<'B': quotati entrambi"             "gh pr create -F - <<'A' <<'B'
+il collaudo gira in $HOME/fuori.txt e basta
+A
+anche qui $HOME/fuori.txt
+B" pass
+perimetro_prova "tee >(bash) <<'EOF'"                         "tee >(bash) <<'EOF'
+cat $HOME/fuori.txt
+EOF" deny
+perimetro_prova "cat <<'EOF' > >(bash)"                       "cat <<'EOF' > >(bash)
+cat $HOME/fuori.txt
+EOF" deny
+
 # con un comando dell'elenco il corpo si toglierebbe: qui << non apre niente
 perimetro_prova "gh --body \"... <<'X'\": stringa, non heredoc"  "gh pr comment 1 --body \"usa <<'X' cosi\"
 cat $HOME/fuori.txt
