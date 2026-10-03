@@ -1079,6 +1079,309 @@ sessione_prova 'manca timeout: lo dice, non «rete»'       senza-timeout  avvis
 sessione_prova 'main indietro, ma in una worktree collegata' worktree     silenzio
 sessione_prova 'checkout principale su un altro ramo'    altro-ramo     silenzio
 
+# ---------------------------------------------------------------------------------
+# 03/10 — ogni gate si chiude quando si rompe; ogni informativo che si rompe lo dice.
+# Due famiglie di prove, e servono tutte e due:
+# - DIRETTE: lo script da solo, con il guasto che puo' vedere dall'interno (payload
+#   illeggibile, campo mancante, eccezione, comando esterno assente). Qui l'involucro
+#   non c'e': se l'eccezione esce, l'uscita e' 1 e la prova fallisce.
+# - INVOLUCRO: il comando scritto in hooks.json, eseguito come lo esegue Claude Code
+#   (`/bin/sh -c`, misurato con ps dentro un hook, Claude Code 2.1.288), con
+#   l'interprete tolto dal PATH. Qui lo script non parte nemmeno: se l'involucro
+#   manca, l'uscita e' 127 e la prova fallisce.
+# Il payload di ogni prova e' uno che il gate, sano, NEGHEREBBE: cosi' «rotto e
+# uscito con 0» vuol dire che un'azione da negare sarebbe passata.
+PLUGIN="$(cd "$H/.." && pwd)"
+comando_hook() { # il comando di hooks.json che lancia questo script
+  python3 - "$H/hooks.json" "$1" <<'PY_EOF'
+import json, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            if "/hooks/" + sys.argv[2] + '"' in h["command"] or h["command"].endswith("/hooks/" + sys.argv[2]):
+                print(h["command"]); sys.exit(0)
+sys.exit(1)
+PY_EOF
+}
+FC=$(mktemp -d)
+path_senza() { # una cartella con tutto il PATH tranne un comando
+  local d="$FC/senza-$1" dir f b
+  [ -d "$d" ] && { printf '%s' "$d"; return; }
+  mkdir -p "$d"
+  local IFS=:
+  for dir in $PATH; do
+    for f in "$dir"/*; do
+      b=${f##*/}
+      case "$b" in "$1"|"$1"[0-9.]*) continue ;; esac
+      [ -x "$f" ] && [ ! -e "$d/$b" ] && ln -s "$f" "$d/$b" 2>/dev/null
+    done
+  done
+  printf '%s' "$d"
+}
+pl() { python3 -c 'import sys,json
+d = {"tool_input": {sys.argv[1]: sys.argv[2]}}
+if len(sys.argv) > 3: d.update(json.loads(sys.argv[3]))
+print(json.dumps(d))' "$@"; }
+riporta() { # etichetta, atteso, ottenuto, dettaglio
+  if [ "$3" = "$2" ]; then printf "  ${V}ok${N}    %-52s %s\n" "$1" "$3"; OK=$((OK+1))
+  else printf "  ${X}KO${N}    %-52s atteso %s, ottenuto %s\n" "$1" "$2" "$3"; KO=$((KO+1))
+       [ -n "${4:-}" ] && printf "        %s\n" "${4:0:300}"; fi
+}
+classifica() { # rc, stdout, stderr -> una parola
+  case "$1" in
+    2) case "$3" in *"gate in errore: "*) echo nega-in-errore ;; *) echo nega ;; esac ;;
+    0) case "$2" in
+         *"hook informativo in errore"*) echo passa-e-lo-dice ;;
+         *'"systemMessage":"gate in errore'*) echo lascia-e-lo-dice ;;
+         "") echo passa-muto ;;
+         *) echo passa-con-uscita ;;
+       esac ;;
+    *) echo "uscita-$1" ;;
+  esac
+}
+diretta() { # etichetta, atteso, script, payload, [VAR=valore ...]
+  local lab="$1" att="$2" scr="$3" pay="$4" out rc; shift 4
+  out=$(printf '%s' "$pay" | env "$@" "$H/$scr" 2>"$FC/err"); rc=$?
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+}
+involucro() { # etichetta, atteso, script, payload, [VAR=valore ...]
+  local lab="$1" att="$2" scr="$3" pay="$4" out rc cmd; shift 4
+  cmd=$(comando_hook "$scr") || { riporta "$lab" "$att" "non-in-hooks.json"; return; }
+  out=$(printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$cmd" 2>"$FC/err"); rc=$?
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+}
+json_valido() { python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; }
+NOPY=$(path_senza python3); NOGIT=$(path_senza git); NOBASH=$(path_senza bash); NOGREP=$(path_senza grep)
+ROTTO='{"tool_input": {"command": "gh pr merge 1'
+
+# repo usa e getta: un commit vecchio e lavoro sporco (guard-tempo e guard-commit negano)
+FR="$FC/repo"; mkdir -p "$FR"; git -C "$FR" init -q -b main
+git -C "$FR" config user.email prova@cantiere.invalid; git -C "$FR" config user.name prova
+echo a > "$FR/a"; git -C "$FR" add -A
+GIT_COMMITTER_DATE='2026-01-01T00:00:00' env -u CLAUDECODE -u CANTIERE_AGENT git -C "$FR" commit -qm base >/dev/null 2>&1
+for n in $(seq 1 25); do echo x > "$FR/f$n"; done
+ESCA="$FC/esca.js"; printf 'const t = "ghp_%s";\n' "$(printf '0%.0s' $(seq 36))" > "$ESCA"
+VOCE=$(pl file_path journal/2026-10-03/x.json '{}' | python3 -c 'import sys,json
+d = json.load(sys.stdin); d["tool_input"]["content"] = json.dumps({"ts": "2026-09-01T10:00:00+02:00"}); print(json.dumps(d))')
+
+echo; echo "Fail-closed — guard-paths (PreToolUse su Bash)"
+P_NEGA=$(pl command 'cat ~/.ssh/id_rsa')
+diretta   'controllo: da sano nega'                     nega            guard-paths.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-paths.sh "$ROTTO"
+diretta   'payload vuoto'                               nega-in-errore  guard-paths.sh ''
+diretta   'tool_input.command mancante'                 nega-in-errore  guard-paths.sh '{"tool_input":{}}'
+diretta   'tool_input mancante'                         nega-in-errore  guard-paths.sh '{"session_id":"x"}'
+diretta   'eccezione: tool_input non e un oggetto'      nega-in-errore  guard-paths.sh '{"tool_input":"cat ~/.ssh/id_rsa"}'
+if [ "$(id -u)" != 0 ]; then
+  cp "$CLAUDE_PROJECT_DIR/.cantiere-deny" "$FC/deny-salvato" 2>/dev/null; : >> "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  permessi=$(stat -c %a "$CLAUDE_PROJECT_DIR/.cantiere-deny" 2>/dev/null || stat -f %Lp "$CLAUDE_PROJECT_DIR/.cantiere-deny")
+  chmod 000 "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  diretta 'eccezione: .cantiere-deny illeggibile'       nega-in-errore  guard-paths.sh "$(pl command 'ls')"
+  chmod "$permessi" "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+  [ -f "$FC/deny-salvato" ] || rm -f "$CLAUDE_PROJECT_DIR/.cantiere-deny"
+fi
+involucro 'python3 assente dal PATH'                    nega-in-errore  guard-paths.sh "$P_NEGA" PATH="$NOPY"
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-paths.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-paths.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-paths.sh "$(pl command 'ls')"
+
+echo; echo "Fail-closed — guard-prod (PreToolUse su Bash)"
+P_NEGA=$(pl command 'gh pr merge 1 --squash')
+diretta   'controllo: da sano nega'                     nega            guard-prod.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-prod.sh "$ROTTO"
+diretta   'payload vuoto'                               nega-in-errore  guard-prod.sh ''
+diretta   'tool_input.command mancante'                 nega-in-errore  guard-prod.sh '{"tool_input":{}}'
+diretta   'tool_input non e un oggetto'                 nega-in-errore  guard-prod.sh '{"tool_input":"gh pr merge 1"}'
+diretta   'command non e una stringa'                   nega-in-errore  guard-prod.sh '{"tool_input":{"command":["gh","pr","merge","1"]}}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-prod.sh "$P_NEGA" PATH="$NOPY"
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-prod.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-prod.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-prod.sh "$(pl command 'terraform plan')"
+
+echo; echo "Fail-closed — guard-tempo (PreToolUse su Bash, Edit, Write)"
+P_NEGA=$(pl command 'npm test' '{"session_id":"S"}')
+diretta   'controllo: da sano nega'                     nega            guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-tempo.py '{"tool_input": {"command": "npm te' CLAUDE_PROJECT_DIR="$FR"
+diretta   'payload vuoto'                               nega-in-errore  guard-tempo.py '' CLAUDE_PROJECT_DIR="$FR"
+diretta   'ne command ne file_path'                     nega-in-errore  guard-tempo.py '{"tool_input":{}}' CLAUDE_PROJECT_DIR="$FR"
+diretta   'tool_input mancante'                         nega-in-errore  guard-tempo.py '{"session_id":"S"}' CLAUDE_PROJECT_DIR="$FR"
+diretta   'eccezione: il payload non e un oggetto'      nega-in-errore  guard-tempo.py '[]' CLAUDE_PROJECT_DIR="$FR"
+diretta   'eccezione: git assente dal PATH'             nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR" PATH="$NOGIT"
+diretta   'cartella di progetto inesistente'            nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR/non-esiste"
+involucro 'python3 assente dal PATH'                    nega-in-errore  guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            guard-tempo.py "$P_NEGA" CLAUDE_PROJECT_DIR="$FR"
+involucro "con l'involucro: la via d'uscita passa"      passa-muto      guard-tempo.py "$(pl command 'git status')" CLAUDE_PROJECT_DIR="$FR"
+
+echo; echo "Fail-closed — agent-env (PreToolUse su Bash)"
+P_NEGA=$(pl command 'git commit -m x' '{"agent_type":"Explore"}')
+diretta   'controllo: da sano nega'                     nega            agent-env.py "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input": {"command": "git comm'
+diretta   'payload vuoto'                               nega-in-errore  agent-env.py ''
+diretta   'tool_input.command mancante'                 nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":{}}'
+diretta   'command non e una stringa'                   nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":{"command":["git","commit"]}}'
+diretta   'eccezione: tool_input non e un oggetto'      nega-in-errore  agent-env.py '{"agent_type":"Explore","tool_input":"git commit"}'
+diretta   'agent_type non e una stringa'                nega-in-errore  agent-env.py '{"agent_type":["Explore"],"tool_input":{"command":"git commit -m x"}}'
+mkdir -p "$FC/plugin/hooks"; cp "$H/agent-env.py" "$FC/plugin/hooks/"      # una copia senza agents/ accanto
+out=$(printf '%s' "$P_NEGA" | python3 "$FC/plugin/hooks/agent-env.py" 2>"$FC/err"); rc=$?
+riporta   'eccezione: la cartella agents/ non si legge' nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+involucro 'python3 assente dal PATH'                    nega-in-errore  agent-env.py "$P_NEGA" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            agent-env.py "$P_NEGA"
+involucro "con l'involucro: senza git passa muto"       passa-muto      agent-env.py "$(pl command 'ls')"
+# l'uscita 0 con JSON deve arrivare intatta: e' il comando riscritto
+out=$(pl command 'git status' '{"agent_type":"cantiere:qa-test"}' | env CLAUDE_PLUGIN_ROOT="$PLUGIN" /bin/sh -c "$(comando_hook agent-env.py)" 2>/dev/null); rc=$?
+riporta   "con l'involucro: il JSON di uscita 0 e' intatto" "0:readonly CANTIERE_AGENT=qa-test; export CANTIERE_AGENT; git status" \
+          "$rc:$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null)"
+
+echo; echo "Fail-closed — guard-commit (PreToolUse su Edit, Write)"
+P_NEGA=$(pl file_path "$FR/nuovo.txt")
+diretta   'controllo: da sano nega'                     nega            guard-commit.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-commit.sh "{\"tool_input\":{\"file_path\":\"$FR/nu"
+diretta   'payload vuoto'                               nega-in-errore  guard-commit.sh ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  guard-commit.sh '{"tool_input":{}}'
+diretta   'tool_input non e un oggetto'                 nega-in-errore  guard-commit.sh '{"tool_input":"x"}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOPY"
+diretta   'git assente dal PATH'                        nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOGIT"
+diretta   'soglia non numerica: vale la predefinita'    nega            guard-commit.sh "$P_NEGA" CANTIERE_SOGLIA_COMMIT=venti
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-commit.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: nega come prima"            nega            guard-commit.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-commit.sh "$P_NEGA" CANTIERE_SOGLIA_COMMIT=500
+
+echo; echo "Fail-closed — journal-ts (PreToolUse su Write)"
+diretta   'controllo: da sano nega'                     nega            journal-ts.py "$VOCE"
+diretta   'payload JSON non valido'                     nega-in-errore  journal-ts.py '{"tool_input":{"file_path":"journal/x.json","content":"{\"ts\":\"2026-09-01'
+diretta   'payload vuoto'                               nega-in-errore  journal-ts.py ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  journal-ts.py '{"tool_input":{"content":"{}"}}'
+diretta   'voce di journal senza tool_input.content'    nega-in-errore  journal-ts.py '{"tool_input":{"file_path":"journal/x.json"}}'
+diretta   'eccezione: il payload non e un oggetto'      nega-in-errore  journal-ts.py '[]'
+diretta   'file_path non e una stringa'                 nega-in-errore  journal-ts.py '{"tool_input":{"file_path":5,"content":"{}"}}'
+involucro 'python3 assente dal PATH'                    nega-in-errore  journal-ts.py "$VOCE" PATH="$NOPY"
+involucro "con l'involucro: nega come prima"            nega            journal-ts.py "$VOCE"
+involucro "con l'involucro: passa come prima"           passa-muto      journal-ts.py "$(pl file_path src/x.json)"
+
+echo; echo "Fail-closed — guard-secrets (PostToolUse su Edit, Write): non disfa, ma lo dice"
+P_NEGA=$(pl file_path "$ESCA")
+diretta   'controllo: da sano segnala'                  nega            guard-secrets.sh "$P_NEGA"
+diretta   'payload JSON non valido'                     nega-in-errore  guard-secrets.sh "{\"tool_input\":{\"file_path\":\"$ESCA\""
+diretta   'payload vuoto'                               nega-in-errore  guard-secrets.sh ''
+diretta   'tool_input.file_path mancante'               nega-in-errore  guard-secrets.sh '{"tool_input":{}}'
+diretta   'python3 assente dal PATH'                    nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOPY"
+diretta   'grep assente dal PATH'                       nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOGREP"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$ESCA"
+  diretta 'file illeggibile'                            nega-in-errore  guard-secrets.sh "$P_NEGA"
+  chmod 644 "$ESCA"
+fi
+involucro 'bash assente dal PATH'                       nega-in-errore  guard-secrets.sh "$P_NEGA" PATH="$NOBASH"
+involucro "con l'involucro: segnala come prima"         nega            guard-secrets.sh "$P_NEGA"
+involucro "con l'involucro: passa come prima"           passa-muto      guard-secrets.sh "$(pl file_path "$FR/a")"
+
+echo; echo "Fail-closed — journal-check (Stop): nega una volta, al secondo giro lascia e lo dice"
+# sessione con lavoro e senza voci: da sano blocca con il JSON di decision
+JR="$FC/journal"; mkdir -p "$JR"; git -C "$JR" init -q -b main
+git -C "$JR" config user.email prova@cantiere.invalid; git -C "$JR" config user.name prova
+echo a > "$JR/a"; git -C "$JR" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$JR" commit -qm base >/dev/null 2>&1
+stop() { # etichetta, atteso, via (diretta|involucro), payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(cd "$JR" && printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$JR" && printf '%s' "$pay" | env "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; esac
+  # quello che esce su stdout con uscita 0 deve essere JSON: se non lo e', Claude Code lo scarta
+  if [ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | json_valido; then esito="$esito+JSON-ROTTO"; fi
+  riporta "$lab" "$att" "$esito" "$(cat "$FC/err")"
+  rm -f "$JR"/.work/sessioni/*.sollecitata
+}
+SP='{"session_id":"FC1","stop_hook_active":false}'; SP2='{"session_id":"FC1","stop_hook_active":true}'
+(cd "$JR" && echo '{"session_id":"FC1"}' | "$H/session-start.sh" >/dev/null 2>&1); echo lavoro > "$JR/src.txt"
+stop 'controllo: da sano blocca'                        blocca          diretta   "$SP"
+stop "con l'involucro: blocca come prima, JSON intatto" blocca          involucro "$SP"
+stop 'payload JSON non valido'                          nega-in-errore  diretta   '{"session_id":"FC1'
+stop 'session_id mancante'                              nega-in-errore  diretta   '{"stop_hook_active":false}'
+stop 'python3 assente dal PATH'                         nega-in-errore  diretta   "$SP" PATH="$NOPY"
+stop 'git assente dal PATH'                             nega-in-errore  diretta   "$SP" PATH="$NOGIT"
+cp "$JR/.work/sessioni/FC1.json" "$FC/foto"; echo '{rotta' > "$JR/.work/sessioni/FC1.json"
+stop 'eccezione: foto di avvio corrotta'                nega-in-errore  diretta   "$SP"
+stop 'foto corrotta, secondo giro: lascia e lo dice'    lascia-e-lo-dice diretta  "$SP2"
+rm -f "$JR/.work/sessioni/FC1.json"
+stop 'foto di avvio assente'                            nega-in-errore  diretta   "$SP"
+cp "$FC/foto" "$JR/.work/sessioni/FC1.json"
+stop 'bash assente dal PATH'                            nega-in-errore  involucro "$SP" PATH="$NOBASH"
+stop 'bash assente, secondo giro: lascia e lo dice'     lascia-e-lo-dice involucro "$SP2" PATH="$NOBASH"
+stop 'foto ripristinata: blocca di nuovo'               blocca          diretta   "$SP"
+
+echo; echo "Informativi — session-start (SessionStart): non blocca, ma il guasto e' nel contesto"
+# Di un SessionStart che non esce con 0 nel contesto non arriva niente (misurato):
+# quindi uscita 0, e il guasto su stdout.
+avvio() { # etichetta, atteso, via, payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc; shift 4
+  rm -rf "$JR/.work"
+  if [ "$via" = involucro ]; then
+    out=$(cd "$JR" && printf '%s' "$pay" | env -u CLAUDECODE CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook session-start.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$JR" && printf '%s' "$pay" | env -u CLAUDECODE "$@" "$H/session-start.sh" 2>"$FC/err"); rc=$?
+  fi
+  riporta "$lab" "$att" "$(classifica "$rc" "$out" "")" "$out"
+}
+avvio 'controllo: da sano non parla di guasti'          passa-con-uscita diretta   '{"session_id":"FC2"}'
+avvio "con l'involucro: come prima"                     passa-con-uscita involucro '{"session_id":"FC2"}'
+avvio 'payload JSON non valido: niente foto, lo dice'   passa-e-lo-dice  diretta   '{"session_id":"FC2'
+avvio 'session_id mancante: niente foto, lo dice'       passa-e-lo-dice  diretta   '{}'
+avvio 'python3 assente dal PATH: lo dice'               passa-e-lo-dice  diretta   '{"session_id":"FC2"}' PATH="$NOPY"
+avvio 'git assente dal PATH: lo dice'                   passa-e-lo-dice  diretta   '{"session_id":"FC2"}' PATH="$NOGIT"
+if [ "$(id -u)" != 0 ]; then
+  rm -rf "$JR/.work"; mkdir "$JR/.work"; chmod 555 "$JR/.work"
+  out=$(cd "$JR" && echo '{"session_id":"FC2"}' | env -u CLAUDECODE "$H/session-start.sh" 2>/dev/null); rc=$?
+  riporta 'eccezione: .work non scrivibile, lo dice'    passa-e-lo-dice "$(classifica "$rc" "$out" "")" "$out"
+  chmod 755 "$JR/.work"
+fi
+avvio 'bash assente dal PATH: lo dice'                  passa-e-lo-dice  involucro '{"session_id":"FC2"}' PATH="$NOBASH"
+
+echo; echo "Informativi — verify-after-edit (PostToolUse): non blocca, ma il guasto e' nel contesto"
+# Su PostToolUse il contesto si raggiunge con additionalContext in un JSON di uscita 0
+# (misurato): un'uscita 1 o 127 non arriva a nessuno.
+verifica() { # etichetta, atteso, via, payload, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="$4" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(printf '%s' "$pay" | env CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook verify-after-edit.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(printf '%s' "$pay" | env "$@" "$H/verify-after-edit.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "")
+  if [ "$esito" = passa-e-lo-dice ]; then
+    printf '%s' "$out" | python3 -c 'import sys,json
+assert "in errore" in json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]' 2>/dev/null || esito="$esito+JSON-ROTTO"
+  fi
+  riporta "$lab" "$att" "$esito" "$out$(cat "$FC/err")"
+}
+echo '{"a":' > "$FC/rotto.json"; echo '{"a": 1}' > "$FC/buono.json"
+verifica 'controllo: da sano rimanda il file rotto'     nega             diretta   "$(pl file_path "$FC/rotto.json")"
+verifica "con l'involucro: rimanda come prima"          nega             involucro "$(pl file_path "$FC/rotto.json")"
+verifica "con l'involucro: passa come prima"            passa-muto       involucro "$(pl file_path "$FC/buono.json")"
+verifica 'payload JSON non valido: lo dice'             passa-e-lo-dice  diretta   "{\"tool_input\":{\"file_path\":\"$FC/rotto.json\""
+verifica 'tool_input.file_path mancante: lo dice'       passa-e-lo-dice  diretta   '{"tool_input":{}}'
+verifica 'python3 assente dal PATH: lo dice'            passa-e-lo-dice  diretta   "$(pl file_path "$FC/rotto.json")" PATH="$NOPY"
+verifica 'bash assente dal PATH: lo dice'               passa-e-lo-dice  involucro "$(pl file_path "$FC/rotto.json")" PATH="$NOBASH"
+
+echo; echo "hooks.json — ogni hook registrato ha il suo involucro"
+# Un hook aggiunto domani senza involucro torna ad aprirsi quando si rompe.
+senza=$(python3 - "$H/hooks.json" <<'PY_EOF'
+import json, re, sys
+conf = json.load(open(sys.argv[1], encoding="utf-8"))
+for gruppi in conf["hooks"].values():
+    for g in gruppi:
+        for h in g["hooks"]:
+            c = h["command"]
+            if not re.search(r'/hooks/[\w.-]+" \|\| ', c):
+                print(c[:60])
+PY_EOF
+)
+riporta 'nessun comando di hooks.json senza «|| ...»'   nessuno "${senza:-nessuno}"
+rm -rf "$FC"
+
 echo
 if [ "$KO" -eq 0 ]; then
   printf "${V}%d verifiche superate, 0 fallite.${N} I gate rispondono.\n\n" "$OK"

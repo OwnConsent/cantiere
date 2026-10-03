@@ -29,6 +29,46 @@ di PR, comandi Kubernetes o Terraform su contesto di produzione e DDL distruttiv
 `journal-check.sh` non lascia chiudere una sessione che ha cambiato codice senza lasciare
 traccia.
 
+## Gate e informativi: cosa succede quando un hook si rompe
+
+**Un gate che si rompe nega. Un informativo che si rompe lo dice.** `hooks.json` non
+ammette commenti, quindi il principio sta qui.
+
+Perché serve scriverlo: per Claude Code solo l'uscita 2 blocca. Un hook che esce con 1
+(un'eccezione), con 127 (interprete assente dal `PATH`), che scade o che stampa un JSON
+troncato è un «errore non bloccante»: l'azione passa e all'agente non arriva niente.
+Misurato il 03/10 con Claude Code 2.1.288 su ognuno dei quattro eventi. Un gate scritto
+senza pensarci è quindi aperto proprio quando è guasto.
+
+| Hook | Evento | Tipo | Quando si rompe |
+|---|---|---|---|
+| `guard-paths.sh` | PreToolUse, Bash | gate | nega il comando |
+| `guard-prod.sh` | PreToolUse, Bash | gate | nega il comando |
+| `guard-tempo.py` | PreToolUse, Bash/Edit/Write | gate | nega il comando o la scrittura |
+| `agent-env.py` | PreToolUse, Bash | gate | nega il comando: senza il suo prefisso la firma si può autodichiarare |
+| `guard-commit.sh` | PreToolUse, Edit/Write | gate | nega la scrittura |
+| `journal-ts.py` | PreToolUse, Write | gate | nega la scrittura |
+| `guard-secrets.sh` | PostToolUse, Edit/Write | gate | il file è già scritto: dice all'agente che NON è stato controllato |
+| `journal-check.sh` | Stop | gate | nega la chiusura una volta; al secondo giro lascia chiudere e lo dice a chi guarda |
+| `verify-after-edit.sh` | PostToolUse, Edit/Write | informativo | non blocca; lo dice nel contesto |
+| `session-start.sh` | SessionStart | informativo | non blocca; lo dice nel contesto |
+
+Due strati, e servono tutti e due:
+
+- **dentro lo script**: payload che non è JSON, campo atteso mancante, eccezione, comando
+  esterno assente diventano un diniego che comincia con `gate in errore:` e dice il motivo;
+- **in `hooks.json`**: ogni comando è un involucro di shell attorno allo script. Se lo
+  script non parte nemmeno (interprete assente, bit di esecuzione perso) non c'è niente
+  che possa intercettarlo dall'interno: l'involucro trasforma in 2 ogni uscita diversa
+  da 0, e lascia intatto quello che un'uscita 0 scrive su stdout. È scritto per `/bin/sh`,
+  non per bash: è con `/bin/sh -c` che Claude Code lancia gli hook.
+
+Chi aggiunge un hook decide prima se è un gate o un informativo, gli mette l'involucro
+del suo tipo e aggiunge a `verifica-gate.sh` i casi in cui si rompe.
+
+Limite noto: il **timeout**. Un hook che supera il `timeout` di `hooks.json` viene
+terminato da Claude Code insieme al suo involucro, e l'azione passa in silenzio.
+
 ## Il journal
 
 Ogni agente scrive in `journal/` **mentre** lavora: decisioni con le alternative scartate,
