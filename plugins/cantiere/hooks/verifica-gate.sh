@@ -1607,6 +1607,27 @@ GIT_COMMITTER_DATE='2026-01-01T00:00:00' env -u CLAUDECODE -u CANTIERE_AGENT git
 diretta 'guard-tempo su Write in sottocartella: vede la foto' passa-muto guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"FC4"}')" CLAUDE_PROJECT_DIR="$RT"
 diretta 'controllo: senza la foto lo stesso Write e negato'   nega       guard-tempo.py "$(pl file_path "$RT/sub/altro.txt" '{"session_id":"ALTRA"}')" CLAUDE_PROJECT_DIR="$RT"
 
+echo; echo "Terza review — dentro .git e in un repository bare non c'e' lavoro da contare"
+# $FR ha un commit vecchio e 25 file sporchi: una scrittura normale li' e' negata da
+# entrambi i gate. Una scrittura sotto .git/ no: `git rev-parse --is-inside-work-tree`
+# risponde «false», e il gate non si applica. Prima `git status` usciva con 128 e la
+# scrittura era negata come guasto.
+mkdir -p "$FR/.git/info"
+diretta 'controllo: Write normale, guard-commit nega'       nega        guard-commit.sh "$(pl file_path "$FR/nuovo.txt")"
+diretta 'controllo: Write normale, guard-tempo nega'        nega        guard-tempo.py  "$(pl file_path "$FR/nuovo.txt")" CLAUDE_PROJECT_DIR="$FR"
+diretta 'Write su .git/info/exclude: guard-commit passa'    passa-muto  guard-commit.sh "$(pl file_path "$FR/.git/info/exclude")"
+diretta 'Write su .git/info/exclude: guard-tempo passa'     passa-muto  guard-tempo.py  "$(pl file_path "$FR/.git/info/exclude")" CLAUDE_PROJECT_DIR="$FR"
+git init -q --bare "$FC/nudo.git"
+diretta 'Write in un repository bare: guard-commit passa'   passa-muto  guard-commit.sh "$(pl file_path "$FC/nudo.git/description")"
+diretta 'Write in un repository bare: guard-tempo passa'    passa-muto  guard-tempo.py  "$(pl file_path "$FC/nudo.git/description")" CLAUDE_PROJECT_DIR="$FC/nudo.git"
+# rev-parse --is-inside-work-tree che fallisce dopo che --git-dir ha risposto: non e'
+# «non e' un repository», e' un guasto. Simulato con un git che fallisce solo li'.
+mkdir -p "$FC/gitfinto"
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --is-inside-work-tree ] && { echo "fatal: errore simulato" >&2; exit 128; }; done\nexec "%s" "$@"\n' "$(command -v git)" > "$FC/gitfinto/git"
+chmod +x "$FC/gitfinto/git"
+diretta 'rev-parse fallisce per altro: guard-commit nega'   nega-in-errore guard-commit.sh "$(pl file_path "$FR/.git/info/exclude")" PATH="$FC/gitfinto:$PATH"
+diretta 'rev-parse fallisce per altro: guard-tempo nega'    nega-in-errore guard-tempo.py  "$(pl file_path "$FR/.git/info/exclude")" CLAUDE_PROJECT_DIR="$FR" PATH="$FC/gitfinto:$PATH"
+
 echo; echo "hooks.json — ogni hook registrato ha il suo involucro"
 # Un hook aggiunto domani senza involucro torna ad aprirsi quando si rompe.
 senza=$(python3 - "$H/hooks.json" <<'PY_EOF'
