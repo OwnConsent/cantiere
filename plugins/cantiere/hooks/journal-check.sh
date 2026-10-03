@@ -21,8 +21,11 @@ INPUT=$(cat 2>/dev/null)
 # Code 2.1.288 e una sessione a due turni (claude -p, poi --resume), al primo Stop del
 # secondo turno stop_hook_active e' di nuovo false. In una sessione interattiva senza
 # foto di avvio ogni turno veniva negato, anche quelli di sola lettura. Ora il guasto
-# si segna nello stesso file .sollecitata del percorso sano, con dentro il motivo:
-# detto una volta, per il resto della sessione si lascia chiudere. Il nome viene da session_id se il payload
+# si segna in .work/sessioni/<sessione>.guasto-segnalato, con dentro il motivo: detto
+# una volta, per il resto della sessione si lascia chiudere. E' un file DIVERSO da
+# .sollecitata, che resta la sollecitazione normale: in una prima versione era lo
+# stesso, e un guasto spegneva la sollecitazione del journal per tutta la sessione,
+# anche dopo che il guasto era passato (03/10, decisione di Andrea). Il nome viene da session_id se il payload
 # si e' letto, altrimenti da CLAUDE_CODE_SESSION_ID, che Claude Code mette
 # nell'ambiente degli hook e che coincide con il session_id del payload (misurato su
 # SessionStart, PreToolUse e Stop). Se il file non si puo' scrivere si ricade su
@@ -31,7 +34,7 @@ BASE="${CLAUDE_PROJECT_DIR:-$PWD}"
 rotto() { # i messaggi sono costanti senza virgolette: entrano in un JSON cosi' come sono
   local id segno=""
   id="${SID:-${CLAUDE_CODE_SESSION_ID:-}}"; id="${id//[^A-Za-z0-9_-]/}"
-  [ -n "$id" ] && [ -d "$BASE" ] && segno="$BASE/.work/sessioni/$id.sollecitata"
+  [ -n "$id" ] && [ -d "$BASE" ] && segno="$BASE/.work/sessioni/$id.guasto-segnalato"
   case "$INPUT" in
     *'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
       [ -n "$segno" ] && { mkdir -p "${segno%/*}" && printf '%s' "$1" > "$segno"; } 2>/dev/null
@@ -70,14 +73,7 @@ v = json.load(sys.stdin)["session_id"]
 if not isinstance(v, str) or not v.strip(): sys.exit(1)
 print(v)' 2>/dev/null) || rotto "il payload non e JSON valido o manca session_id"
   NUDGE=".work/sessioni/${SID//[^A-Za-z0-9_-]/}.sollecitata"
-  if [ -f "$NUDGE" ]; then
-    # Vuoto: la sollecitazione del percorso sano. Non vuoto: l'ha scritto rotto(), con
-    # il motivo; al secondo giro dello stesso turno lo si ripete a chi guarda.
-    if [ -s "$NUDGE" ]; then
-      case "$INPUT" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) rotto "$(cat "$NUDGE")" ;; esac
-    fi
-    exit 0
-  fi
+  [ -f "$NUDGE" ] && exit 0
 
   STATO=$(python3 "$(dirname "$0")/journal-stato.py" esame "$SID" 2>/dev/null); RC=$?
   # 3 = la foto non c'e' (journal-stato.py); il resto e' un errore mentre la si confronta
