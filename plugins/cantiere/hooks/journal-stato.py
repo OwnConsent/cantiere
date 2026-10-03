@@ -58,7 +58,9 @@ def foto(sid):
 def esame(sid):
     p = percorso(sid)
     if not os.path.isfile(p):
-        sys.exit(f"manca la foto di avvio della sessione ({p})")
+        # uscita 3, distinta dall'errore: journal-check la riconosce e lo dice
+        print(f"manca la foto di avvio della sessione ({p})", file=sys.stderr)
+        sys.exit(3)
     s = json.load(open(p, encoding="utf-8"))
     ora = sporchi()
     cambiati = {f for f, h in ora.items() if s["sporchi"].get(f) != h}

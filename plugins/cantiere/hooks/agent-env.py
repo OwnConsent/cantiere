@@ -256,7 +256,7 @@ def esamina(d):
                                       "updatedInput": nuovo}}, sys.stdout)
     sys.exit(0)
 
-def main():
+def lavoro():
     # FAIL-CLOSED (03/10). Se questo hook si rompe il comando gira senza prefisso, e
     # il secondo strato regge solo a meta'. Misurato su repo usa e getta, con questo
     # hook saltato: un `git commit` semplice e' negato dal git hook, ma
@@ -272,6 +272,17 @@ def main():
         esamina(d)
     except Exception as e:
         rotto(f"{type(e).__name__}: {e}")
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("agent-env.py", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
+
 
 if __name__ == "__main__":
     main()

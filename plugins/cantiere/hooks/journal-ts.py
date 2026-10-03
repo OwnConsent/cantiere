@@ -87,7 +87,7 @@ def esamina(payload):
     sys.exit(2)
 
 
-def main():
+def lavoro():
     # FAIL-CLOSED (03/10). Il payload che non si legge usciva con 0, un tool_input o
     # un file_path di tipo sbagliato con 1: per Claude Code la scrittura passava.
     # Restano uscite 0 volute la voce che non e' JSON e il ts assente: li' il gate
@@ -100,6 +100,17 @@ def main():
         esamina(payload)
     except Exception as e:
         rotto(f"{type(e).__name__}: {e}")
+
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("journal-ts.py", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
 
 
 if __name__ == "__main__":

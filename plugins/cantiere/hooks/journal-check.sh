@@ -25,26 +25,34 @@ rotto() { # i messaggi sono costanti senza virgolette: entrano in un JSON cosi' 
   echo "gate in errore: journal-check: $1: il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore e perche', poi chiudi: al secondo tentativo ti lascio andare." >&2
   exit 2
 }
-command -v git >/dev/null 2>&1 || rotto "git non e nel PATH"
-git rev-parse --git-dir >/dev/null 2>&1 || exit 0
-command -v python3 >/dev/null 2>&1 || rotto "python3 non e nel PATH"
-SID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
+corpo() {
+  command -v git >/dev/null 2>&1 || rotto "git non e nel PATH"
+  git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+  command -v python3 >/dev/null 2>&1 || rotto "python3 non e nel PATH"
+  SID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json
 v = json.load(sys.stdin)["session_id"]
 if not isinstance(v, str) or not v.strip(): sys.exit(1)
 print(v)' 2>/dev/null) || rotto "il payload non e JSON valido o manca session_id"
-NUDGE=".work/sessioni/${SID//[^A-Za-z0-9_-]/}.sollecitata"
-[ -f "$NUDGE" ] && exit 0
+  NUDGE=".work/sessioni/${SID//[^A-Za-z0-9_-]/}.sollecitata"
+  [ -f "$NUDGE" ] && exit 0
 
-STATO=$(python3 "$(dirname "$0")/journal-stato.py" esame "$SID" 2>/dev/null) \
-  || rotto "non ho potuto confrontare lo stato con la foto di avvio (assente, illeggibile o corrotta, oppure git in errore)"
-read -r LAVORO VOCI <<< "$STATO"
-[[ "${LAVORO:-}" =~ ^[0-9]+$ && "${VOCI:-}" =~ ^[0-9]+$ ]] || rotto "journal-stato.py non ha restituito due numeri"
-[ "$LAVORO" -gt 0 ] || exit 0
-[ "${VOCI:-0}" -gt 0 ] && exit 0
+  STATO=$(python3 "$(dirname "$0")/journal-stato.py" esame "$SID" 2>/dev/null); RC=$?
+  # 3 = la foto non c'e' (journal-stato.py); il resto e' un errore mentre la si confronta
+  [ "$RC" -eq 3 ] && rotto "manca la foto di avvio di questa sessione: di solito significa che SessionStart non e girato o si e rotto"
+  [ "$RC" -eq 0 ] || rotto "non ho potuto confrontare lo stato con la foto di avvio (illeggibile o corrotta, oppure git in errore)"
+  read -r LAVORO VOCI <<< "$STATO"
+  [[ "${LAVORO:-}" =~ ^[0-9]+$ && "${VOCI:-}" =~ ^[0-9]+$ ]] || rotto "journal-stato.py non ha restituito due numeri"
+  [ "$LAVORO" -gt 0 ] || exit 0
+  [ "${VOCI:-0}" -gt 0 ] && exit 0
 
-{ mkdir -p .work/sessioni && : > "$NUDGE"; } 2>/dev/null \
-  || rotto "non posso scrivere in .work/sessioni e non posso segnarmi di averti gia sollecitato"
-cat <<'JSON'
+  { mkdir -p .work/sessioni && : > "$NUDGE"; } 2>/dev/null \
+    || rotto "non posso scrivere in .work/sessioni e non posso segnarmi di averti gia sollecitato"
+  cat <<'JSON'
 {"decision":"block","reason":"In questa sessione e' cambiato del lavoro ma journal/ non ha voci nuove. Prima di chiudere scrivi le voci mancanti seguendo docs/JOURNAL.md: ogni decisione, ogni gate, ogni tentativo fallito, ogni misura. Il campo ts si prende da `date -Is` eseguito in quel momento, mai a memoria. Scrivile come sono andate davvero. Se ritieni che il lavoro contato non sia tuo, non scrivere una voce per farmi tacere: dillo, con la misura."}
 JSON
-exit 0
+  exit 0
+}
+# SVEGLIA (03/10): il gate gira sotto un limite ricavato dal timeout di hooks.json.
+# Se lo supera nega, invece di farsi terminare da Claude Code e lasciar passare.
+. "$(dirname "$0")/sveglia.sh" 2>/dev/null || rotto "non trovo sveglia.sh accanto allo script"
+con_sveglia journal-check.sh corpo

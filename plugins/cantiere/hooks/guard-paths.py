@@ -538,7 +538,7 @@ def esamina(dati):
     sys.exit(0)
 
 
-def main():
+def lavoro():
     # FAIL-CLOSED: un'eccezione qui farebbe uscire l'hook con 1, che per Claude Code
     # e' un errore non bloccante. deny() e sys.exit() sollevano SystemExit e passano.
     # 03/10: vale anche per il payload che non si legge, che usciva con 0.
@@ -550,6 +550,17 @@ def main():
         esamina(dati)
     except Exception as e:
         rotto(f"errore del parser ({type(e).__name__}: {e})")
+
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("guard-paths.sh", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
 
 
 if __name__ == "__main__":

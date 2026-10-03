@@ -141,7 +141,7 @@ def esamina(payload):
     sys.exit(2)
 
 
-def main():
+def lavoro():
     # FAIL-CLOSED (03/10). Misurato: un payload che non e' un oggetto, un tool_input
     # che non e' un oggetto o git assente dal PATH facevano uscire l'hook con 1, e un
     # payload illeggibile con 0. Per Claude Code sono errori non bloccanti: il comando
@@ -154,6 +154,17 @@ def main():
         esamina(payload)
     except Exception as e:
         rotto(f"{type(e).__name__}: {e}")
+
+
+def main():
+    # SVEGLIA (03/10): un gate che supera il timeout di hooks.json viene terminato da
+    # Claude Code e l'azione passa. lavoro() gira sotto una sveglia piu' corta, ricavata
+    # da quel timeout: allo scadere si nega. Vedi sveglia.py.
+    try:
+        from sveglia import con_sveglia
+        con_sveglia("guard-tempo.py", lavoro, rotto)
+    except Exception as e:
+        rotto(f"la sveglia non e' partita ({type(e).__name__}: {e})")
 
 
 if __name__ == "__main__":
