@@ -16,13 +16,34 @@
 # tredici successivi): al secondo giro si lascia chiudere, dicendolo a chi guarda.
 set -uo pipefail
 INPUT=$(cat 2>/dev/null)
+# UNA VOLTA PER SESSIONE (seconda review della PR 19). Fino a qui il «nega una volta»
+# guardava solo stop_hook_active, e valeva una volta per TURNO: misurato con Claude
+# Code 2.1.288 e una sessione a due turni (claude -p, poi --resume), al primo Stop del
+# secondo turno stop_hook_active e' di nuovo false. In una sessione interattiva senza
+# foto di avvio ogni turno veniva negato, anche quelli di sola lettura. Ora il guasto
+# si segna nello stesso file .sollecitata del percorso sano, con dentro il motivo:
+# detto una volta, per il resto della sessione si lascia chiudere. Il nome viene da session_id se il payload
+# si e' letto, altrimenti da CLAUDE_CODE_SESSION_ID, che Claude Code mette
+# nell'ambiente degli hook e che coincide con il session_id del payload (misurato su
+# SessionStart, PreToolUse e Stop). Se il file non si puo' scrivere si ricade su
+# stop_hook_active, cioe' una volta per turno, e il diniego lo dice.
+BASE="${CLAUDE_PROJECT_DIR:-$PWD}"
 rotto() { # i messaggi sono costanti senza virgolette: entrano in un JSON cosi' come sono
+  local id segno=""
+  id="${SID:-${CLAUDE_CODE_SESSION_ID:-}}"; id="${id//[^A-Za-z0-9_-]/}"
+  [ -n "$id" ] && [ -d "$BASE" ] && segno="$BASE/.work/sessioni/$id.sollecitata"
   case "$INPUT" in
     *'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
+      [ -n "$segno" ] && { mkdir -p "${segno%/*}" && printf '%s' "$1" > "$segno"; } 2>/dev/null
       printf '{"systemMessage":"gate in errore: journal-check: %s. Il journal di questa sessione NON e stato controllato. Gia detto una volta: lascio chiudere."}\n' "$1"
       exit 0 ;;
   esac
-  echo "gate in errore: journal-check: $1: il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore e perche', poi chiudi: al secondo tentativo ti lascio andare." >&2
+  [ -n "$segno" ] && [ -f "$segno" ] && exit 0      # gia' detto in questa sessione
+  if [ -n "$segno" ] && { mkdir -p "${segno%/*}" && printf '%s' "$1" > "$segno"; } 2>/dev/null; then
+    echo "gate in errore: journal-check: $1: il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore e perche', poi chiudi: al secondo tentativo ti lascio andare, e in questa sessione non te lo ripeto." >&2
+  else
+    echo "gate in errore: journal-check: $1: il journal di questa sessione NON e' stato controllato. Verifica tu che le voci di journal/ ci siano, scrivi nella risposta finale che questo gate e' in errore e perche', poi chiudi: al secondo tentativo ti lascio andare. Non ho potuto segnarmi di avertelo detto (.work/sessioni non scrivibile, o sessione senza identificativo): lo ripetero' a ogni turno." >&2
+  fi
   exit 2
 }
 # Comandi esterni (review della PR 19): se uno manca dal PATH il valore che doveva
@@ -49,7 +70,14 @@ v = json.load(sys.stdin)["session_id"]
 if not isinstance(v, str) or not v.strip(): sys.exit(1)
 print(v)' 2>/dev/null) || rotto "il payload non e JSON valido o manca session_id"
   NUDGE=".work/sessioni/${SID//[^A-Za-z0-9_-]/}.sollecitata"
-  [ -f "$NUDGE" ] && exit 0
+  if [ -f "$NUDGE" ]; then
+    # Vuoto: la sollecitazione del percorso sano. Non vuoto: l'ha scritto rotto(), con
+    # il motivo; al secondo giro dello stesso turno lo si ripete a chi guarda.
+    if [ -s "$NUDGE" ]; then
+      case "$INPUT" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) rotto "$(cat "$NUDGE")" ;; esac
+    fi
+    exit 0
+  fi
 
   STATO=$(python3 "$(dirname "$0")/journal-stato.py" esame "$SID" 2>/dev/null); RC=$?
   # 3 = la foto non c'e' (journal-stato.py); il resto e' un errore mentre la si confronta
