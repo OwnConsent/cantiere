@@ -47,15 +47,22 @@ jobs:
       - name: hooks.json punta a file che esistono
         run: |
           python3 - <<'PY'
-          import json, os, sys
+          import json, os, re, sys
           conf = json.load(open("plugins/cantiere/hooks/hooks.json"))
           mancanti = []
           for evento, gruppi in conf["hooks"].items():
               for gruppo in gruppi:
                   for h in gruppo.get("hooks", []):
-                      p = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", "plugins/cantiere")
-                      if not os.path.isfile(p):
-                          mancanti.append(f"{evento}: {p}")
+                      # dal 03/10 il comando e' un involucro di shell attorno allo script:
+                      # "${CLAUDE_PLUGIN_ROOT}/hooks/x.sh" || { ... }. Lo script e' il
+                      # percorso fra virgolette; un comando senza, non lo si sa verificare.
+                      trovati = re.findall(r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', h["command"])
+                      if not trovati:
+                          mancanti.append(f"{evento}: nessuno script riconosciuto in: {h['command'][:60]}")
+                      for t in trovati:
+                          p = os.path.join("plugins/cantiere", t)
+                          if not os.path.isfile(p):
+                              mancanti.append(f"{evento}: {p}")
           if mancanti:
               print("hook registrati ma inesistenti:", *mancanti, sep="\n  ")
               sys.exit(1)
