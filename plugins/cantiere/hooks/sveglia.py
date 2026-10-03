@@ -51,6 +51,13 @@ def con_sveglia(hook, corpo, rotto):
     sys.stdout.flush(); sys.stderr.flush()
     figlio = os.fork()
     if figlio == 0:
+        # un gruppo di processi suo, come nella sveglia in shell: allo scadere si
+        # termina il gruppo, cioe' anche il git che il gate ha lanciato e che e' la
+        # cosa piu' probabile a piantarsi. Con il solo figlio terminato restava orfano.
+        try:
+            os.setsid()
+        except OSError:
+            pass
         codice = 0
         try:
             corpo()
@@ -73,13 +80,22 @@ def con_sveglia(hook, corpo, rotto):
         signal.alarm(0)
     except _Scaduto:
         try:
-            os.kill(figlio, signal.SIGKILL)
+            os.killpg(figlio, signal.SIGKILL)
+        except OSError:                 # il figlio non ha fatto in tempo a farsi un gruppo
+            try:
+                os.kill(figlio, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
             os.waitpid(figlio, 0)
         except OSError:
             pass
         rotto(f"tempo esaurito dopo {limite} s (il timeout in hooks.json e' "
               f"{limite + MARGINE} s)")
-    sys.exit(os.waitstatus_to_exitcode(stato) if os.WIFEXITED(stato) else 1)
+    # os.WEXITSTATUS e non os.waitstatus_to_exitcode, che esiste solo da Python 3.9:
+    # su 3.8 il figlio decideva, poi il padre andava in AttributeError e ogni gate
+    # Python negava ogni azione, `git commit` compreso (review della PR 19).
+    sys.exit(os.WEXITSTATUS(stato) if os.WIFEXITED(stato) else 1)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
