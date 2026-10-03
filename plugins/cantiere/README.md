@@ -49,7 +49,7 @@ senza pensarci è quindi aperto proprio quando è guasto.
 | `guard-commit.sh` | PreToolUse, Edit/Write | gate | nega la scrittura |
 | `journal-ts.py` | PreToolUse, Write | gate | nega la scrittura |
 | `guard-secrets.sh` | PostToolUse, Edit/Write | gate | il file è già scritto: dice all'agente che NON è stato controllato |
-| `journal-check.sh` | Stop | gate | nega la chiusura una volta; al secondo giro lascia chiudere e lo dice a chi guarda |
+| `journal-check.sh` | Stop | gate | nega la chiusura una volta per sessione; al secondo giro lascia chiudere e lo dice a chi guarda |
 | `verify-after-edit.sh` | PostToolUse, Edit/Write | informativo | non blocca; lo dice nel contesto |
 | `session-start.sh` | SessionStart | informativo | non blocca; lo dice nel contesto |
 
@@ -85,6 +85,14 @@ sessione è partita. Un hook gira nella cartella corrente dell'agente, che dopo 
 non è più quella: `journal-check` e `guard-tempo` la ritrovano con `CLAUDE_PROJECT_DIR`,
 che resta la cartella di avvio (misurato il 03/10 nel checkout principale, in una
 worktree, dopo un `cd` in una sottocartella e dopo un `cd` in un'altra worktree).
+
+Un gate di Stop rotto nega **una volta per sessione**, non una per turno: il guasto si
+segna in `.work/sessioni/<sessione>.sollecitata`, lo stesso file della sollecitazione
+normale. `stop_hook_active` non basta, perché a ogni turno nuovo torna `false`
+(misurato il 03/10 con una sessione a due turni). Quando lo script non parte nemmeno,
+l'involucro ricava il nome del file da `CLAUDE_CODE_SESSION_ID`, che Claude Code mette
+nell'ambiente degli hook. Se il file non si può scrivere si torna a una volta per
+turno, e il diniego lo dice.
 
 Limiti noti: se la sveglia non scatta prima del timeout (misurato portandola oltre:
 il comando parte) si torna al caso di partenza; gli hook informativi non hanno sveglia,

@@ -1105,6 +1105,9 @@ sys.exit(1)
 PY_EOF
 }
 FC=$(mktemp -d)
+# Se la suite gira da dentro Claude Code, l'identificativo della sessione vera non deve
+# entrare nelle prove: journal-check lo usa per il nome del file .sollecitata.
+unset CLAUDE_CODE_SESSION_ID
 path_senza() { # una cartella con tutto il PATH tranne un comando
   local d="$FC/senza-$1" dir f b
   [ -d "$d" ] && { printf '%s' "$d"; return; }
@@ -1523,6 +1526,7 @@ for c in git python3 cat dirname sleep mkdir; do
   esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
   case "$(cat "$FC/err")" in *"comando esterno mancante: $c"*) esito="$esito:mancante" ;; esac
   riporta "journal-check: senza $c" nega-in-errore:mancante "$esito" "$(cat "$FC/err")"
+  rm -f "$RJ"/.work/sessioni/*.sollecitata
 done
 
 # 4) La cartella di lavoro. Misurato con Claude Code 2.1.288: un hook gira nella
@@ -1533,6 +1537,50 @@ case "$rc:$out" in 0:*'"decision":"block"'*) esito=blocca ;; *) esito="$(classif
 riporta 'Stop da una sottocartella: trova la foto e blocca' blocca "$esito" "$(cat "$FC/err")"
 riporta 'Stop da una sottocartella: nessun .work li dentro' assente "$([ -e "$RJ/sub/dentro/.work" ] && echo creato || echo assente)"
 rm -f "$RJ"/.work/sessioni/*.sollecitata
+
+# 5) Seconda review: il diniego di un gate di Stop rotto e' uno per SESSIONE, non uno
+#    per turno. Misurato: al primo Stop di un turno nuovo stop_hook_active e' di nuovo
+#    false. Una sessione senza foto di avvio, due turni.
+R2="$FC/due-turni"; mkdir -p "$R2"; git -C "$R2" init -q -b main
+git -C "$R2" config user.email prova@cantiere.invalid; git -C "$R2" config user.name prova
+echo a > "$R2/a"; git -C "$R2" add -A; env -u CLAUDECODE -u CANTIERE_AGENT git -C "$R2" commit -qm base >/dev/null 2>&1
+turno() { # etichetta, atteso, via (diretta|involucro), stop_hook_active, [VAR=valore ...]
+  local lab="$1" att="$2" via="$3" pay="{\"session_id\":\"FC5\",\"stop_hook_active\":$4}" out rc esito; shift 4
+  if [ "$via" = involucro ]; then
+    out=$(cd "$R2" && printf '%s' "$pay" | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_PLUGIN_ROOT="$PLUGIN" "$@" /bin/sh -c "$(comando_hook journal-check.sh)" 2>"$FC/err"); rc=$?
+  else
+    out=$(cd "$R2" && printf '%s' "$pay" | env CLAUDE_PROJECT_DIR="$R2" "$@" "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+  fi
+  esito=$(classifica "$rc" "$out" "$(cat "$FC/err")")
+  case "$(cat "$FC/err")" in *"lo ripetero' a ogni turno"*) esito="$esito:ogni-turno" ;; esac
+  if [ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s' "$out" | json_valido; then esito="$esito+JSON-ROTTO"; fi
+  riporta "$lab" "$att" "$esito" "$(cat "$FC/err")"
+}
+turno 'senza foto, turno 1: nega'                        nega-in-errore   diretta false
+turno 'senza foto, turno 1, secondo giro: lascia'        lascia-e-lo-dice diretta true
+turno 'senza foto, turno 2: NON nega di nuovo'           passa-muto       diretta false
+turno 'senza foto, turno 3: nemmeno'                     passa-muto       diretta false
+rm -rf "$R2/.work"
+# il payload non si legge: il nome del file viene da CLAUDE_CODE_SESSION_ID
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5' | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_CODE_SESSION_ID=FC5 "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+riporta 'payload illeggibile, turno 1: nega'             nega-in-errore "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+out=$(cd "$R2" && printf '%s' '{"session_id":"FC5' | env CLAUDE_PROJECT_DIR="$R2" CLAUDE_CODE_SESSION_ID=FC5 "$H/journal-check.sh" 2>"$FC/err"); rc=$?
+riporta 'payload illeggibile, turno 2: NON nega di nuovo' passa-muto    "$(classifica "$rc" "$out" "$(cat "$FC/err")")" "$(cat "$FC/err")"
+rm -rf "$R2/.work"
+# lo script non parte nemmeno: l'involucro fa lo stesso con CLAUDE_CODE_SESSION_ID
+turno 'involucro, bash assente, turno 1: nega'           nega-in-errore   involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+turno 'involucro, turno 1, secondo giro: lascia'         lascia-e-lo-dice involucro true  PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+turno 'involucro, turno 2: NON nega di nuovo'            passa-muto       involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+rm -rf "$R2/.work"
+# il file non si puo' scrivere: si ricade su stop_hook_active, una volta per turno, e lo dice
+if [ "$(id -u)" != 0 ]; then
+  mkdir "$R2/.work"; chmod 555 "$R2/.work"
+  turno '.work non scrivibile, turno 1: nega e lo dice'  nega-in-errore:ogni-turno diretta false
+  turno '.work non scrivibile, secondo giro: lascia'     lascia-e-lo-dice          diretta true
+  turno '.work non scrivibile, turno 2: nega ancora'     nega-in-errore:ogni-turno diretta false
+  turno 'involucro, .work non scrivibile: nega e lo dice' nega-in-errore:ogni-turno involucro false PATH="$NOBASH" CLAUDE_CODE_SESSION_ID=FC5
+  chmod 755 "$R2/.work"
+fi
 # guard-tempo su una scrittura in sottocartella: l'inizio della sessione si legge dalla
 # foto nella cartella di avvio. Commit vecchio, sessione appena partita: non nega.
 RT="$FC/tempo"; mkdir -p "$RT/sub"; git -C "$RT" init -q -b main
