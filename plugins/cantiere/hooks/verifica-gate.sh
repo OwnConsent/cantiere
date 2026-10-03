@@ -350,6 +350,19 @@ case "$rc:$out" in
   2:*"troppe sostituzioni di comando annidate"*) printf "  ${V}ok${N}    %-52s %s\n" "1200 \$(: il diniego dice il motivo" "testo presente"; OK=$((OK+1)) ;;
   *) printf "  ${X}KO${N}    %-52s uscita %s\n" "1200 \$(: il diniego dice il motivo" "$rc"; KO=$((KO+1)) ;;
 esac
+# Oltre otto livelli di sostituzioni annidate il comando e' negato, non esaminato a
+# meta': prima la scansione si fermava al quarto livello senza dirlo. Il contenuto
+# piu' interno legge DENTRO il progetto: il diniego viene solo dalla soglia.
+annidate() { python3 -c 'import sys
+c = "cat docs/x.md"
+for _ in range(int(sys.argv[1])): c = "echo \"$(" + c + ")\""
+print(c)' "$1"; }
+out=$(python3 -c 'import sys,json;print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$(annidate 9)" | "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
+case "$rc:$out" in
+  2:*"troppe sostituzioni di comando annidate: non le esamino tutte"*) printf "  ${V}ok${N}    %-52s %s\n" "nove sostituzioni annidate: negate, lo dice" "deny"; OK=$((OK+1)) ;;
+  *) printf "  ${X}KO${N}    %-52s uscita %s\n" "nove sostituzioni annidate: negate, lo dice" "$rc"; KO=$((KO+1)) ;;
+esac
+perimetro_prova 'otto sostituzioni annidate: esaminate tutte'  "$(annidate 8)" pass
 out=$(printf '{"tool_input":{"command":123}}' | "$H/guard-paths.sh" 2>&1 >/dev/null); rc=$?
 case "$rc:$out" in
   2:*"errore del parser"*) printf "  ${V}ok${N}    %-52s %s\n" "eccezione qualsiasi (comando non stringa): negato" "deny"; OK=$((OK+1)) ;;
