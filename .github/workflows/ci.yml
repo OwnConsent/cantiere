@@ -23,9 +23,30 @@ concurrency:
 jobs:
   ci:
     name: ci
-    runs-on: ubuntu-latest
+    # Immagine fissata. Dal 19/10/2026 l'etichetta mobile passa a Ubuntu 26.04, a
+    # scaglioni fino al 19/11: nel frattempo lo stesso job gira su una o sull'altra.
+    #   https://github.com/actions/runner-images/issues/14748
+    # Su 26.04 il passo «Python minimo dichiarato» fallisce: actions/python-versions
+    # ha build del 3.8 solo per 20.04, 22.04 e 24.04 (manifest letto il 03/10/2026).
+    # Si passa a ubuntu-26.04 con una PR che lo prova, non per il calendario di GitHub.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Nessun runs-on su un'etichetta mobile
+        run: |
+          # Un runs-on: ubuntu-latest rimesso per abitudine non fallisce subito:
+          # cambia immagine un giorno qualunque, e il rosso arriva su una PR che
+          # non c'entra. Si cerca la chiave, non la parola: commenti e questo passo
+          # non contano. Non vede un'etichetta passata da una matrix.
+          trovati=$(grep -nE '^[[:space:]]*runs-on:.*ubuntu-latest' .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null || true)
+          if [ -n "$trovati" ]; then
+            echo "runs-on su ubuntu-latest:"; echo "$trovati"
+            echo "ubuntu-latest cambia immagine quando lo decide GitHub (actions/runner-images#14748:"
+            echo "a 26.04 dal 19/10/2026), e su 26.04 Python 3.8 non si installa. Scrivi l'immagine: ubuntu-24.04."
+            exit 1
+          fi
+          echo "nessun runs-on su ubuntu-latest"
 
       - name: Sintassi
         run: |
