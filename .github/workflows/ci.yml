@@ -135,6 +135,35 @@ jobs:
           git add -A && git commit -qm base
           CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
 
+      # MUTAZIONE (passo provvisorio, si toglie dopo averlo visto): su una copia il finto
+      # git torna a essere un link «dormi» a sleep. Su 26.04 i tre casi devono fallire.
+      - name: Mutazione — il finto git rimesso come link
+        run: |
+          C="$RUNNER_TEMP/copia-mutazione"; rm -rf "$C"; mkdir -p "$C"
+          cp -r plugins template "$C/"
+          S="$C/plugins/cantiere/hooks/verifica-gate.sh"
+          sed -i \
+            -e 's|^mkdir -p "\$SV/bin"$|mkdir -p "$SV/bin"; ln -s "$(command -v sleep)" "$SV/bin/dormi"|' \
+            -e 's|\\nexec sleep 30\\n'"'"' "\$SV" > "\$SV/bin/git"|\\nexec "%s/bin/dormi" 30\\n'"'"' "$SV" "$SV" > "$SV/bin/git"|' \
+            "$S"
+          echo "--- differenze della copia rispetto a verifica-gate.sh"
+          diff plugins/cantiere/hooks/verifica-gate.sh "$S" || true
+          echo "--- sleep: $(sleep --version | head -1)   python3: $(python3 --version)"
+          P="$RUNNER_TEMP/progetto-prova-mutazione"
+          mkdir -p "$P" && cd "$P"
+          git init -q -b main
+          git config user.email ci@cantiere.invalid
+          git config user.name ci
+          printf 'OwnConsent/cmp\n' > .cantiere-deny
+          echo segnaposto > CLAUDE.md
+          git add -A && git commit -qm base
+          rc=0; CLAUDE_PROJECT_DIR="$P" bash "$S" > "$RUNNER_TEMP/mutazione.out" 2>&1 || rc=$?
+          echo "--- uscita della suite mutata: $rc"
+          echo "--- tutti i KO della copia"
+          sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/mutazione.out" | grep -A1 -E '^  KO ' || echo "    nessun KO"
+          echo "--- conteggio della copia"
+          sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/mutazione.out" | grep -E 'verifiche superate|fallite'
+
       # Il README del plugin dichiara Python 3.10 come minimo. Il runner ha un Python piu'
       # recente (3.14 su ubuntu-26.04), che non vede l'uso di una funzione nata dopo:
       # os.waitstatus_to_exitcode (3.9) e' arrivata cosi' fino alla review della PR 19,
