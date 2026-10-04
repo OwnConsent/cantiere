@@ -179,6 +179,10 @@ jobs:
       - name: Blocco 4 — verifica-gate con il python3 di sistema
         run: bash .github/prova-2604/gate.sh 4
 
+      - name: Blocco 6 — link dormi, controprova sui gate, GNU a parte
+        if: always()
+        run: bash .github/prova-2604/blocco6.sh
+
       # stessa versione dell'action del job ci (v5), scritta come SHA
       - name: Blocco 5 — setup-python 3.10
         id: py310
@@ -213,3 +217,7 @@ jobs:
 
       - name: Blocchi 1-3 — ambiente, coreutils, comportamenti
         run: bash .github/prova-2604/ambiente.sh
+
+      - name: Blocco 6 — link dormi, controprova sui gate, GNU a parte
+        if: always()
+        run: bash .github/prova-2604/blocco6.sh
