@@ -74,11 +74,13 @@ corta, e allo scadere nega con `gate in errore: <hook>: tempo esaurito`. La sveg
 dichiara per quell'hook, meno un margine di 2 secondi. Per cambiare il limite di un gate
 si cambia il suo `timeout` in `hooks.json`, e basta.
 
-Cosa serve sulla macchina: **Python 3.8 o successivo** come `python3`, bash, git e i
+Cosa serve sulla macchina: **Python 3.10 o successivo** come `python3`, bash, git e i
 comandi di base (`cat`, `sed`, `grep`, `dirname`, `sleep`, `mkdir`). La CI esegue
-`verifica-gate.sh` due volte: con il Python del runner e con il 3.8. Un gate in shell
-controlla i comandi esterni che usa prima di cominciare, e se uno manca nega con
-`gate in errore: … comando esterno mancante`.
+`verifica-gate.sh` due volte: con il Python del runner e con il 3.10. Il minimo non è
+il 3.8 perché il 3.8 è fuori supporto e non ha una build per ubuntu-26.04, l'immagine
+della CI; il 3.10 è la versione più vecchia disponibile sia su ubuntu-24.04 sia su
+ubuntu-26.04. Un gate in shell controlla i comandi esterni che usa prima di cominciare,
+e se uno manca nega con `gate in errore: … comando esterno mancante`.
 
 La foto di avvio (`.work/sessioni/<sessione>.json`) sta nella cartella in cui la
 sessione è partita. Un hook gira nella cartella corrente dell'agente, che dopo un `cd`

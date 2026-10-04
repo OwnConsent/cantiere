@@ -1396,8 +1396,19 @@ lento 'journal-ts: non finisce di leggere'       journal-ts.py    "$VOCE"
 lento 'guard-secrets: non finisce di leggere'    guard-secrets.sh "$(pl file_path "$ESCA")"
 # journal-check legge il payload prima della sveglia (gli serve per stop_hook_active):
 # qui a non finire e' git, sostituito da uno che dorme
-mkdir -p "$SV/bin"; ln -s "$(command -v sleep)" "$SV/bin/dormi"
-printf '#!/bin/sh\nexec "%s/bin/dormi" 30\n' "$SV" > "$SV/bin/git"; chmod +x "$SV/bin/git"
+# Il finto git e' uno script che fa exec sleep, non un link «dormi» a sleep. Su
+# ubuntu-26.04 sleep e' quello di uutils, che non parte sotto un nome non suo («Security
+# violation: Requested utility `dormi` does not match executable name»): il finto git
+# usciva subito e i tre casi «git non finisce» fallivano (prova del 04/10, PR 21).
+# Senza «dormi» nella riga di comando il processo si riconosce dal pid, che exec
+# conserva: lo script lo scrive prima di passare a sleep.
+mkdir -p "$SV/bin"
+printf '#!/bin/sh\necho $$ >> "%s/git.pid"\nexec sleep 30\n' "$SV" > "$SV/bin/git"; chmod +x "$SV/bin/git"
+git_vivi() { # quanti finti git sono ancora in vita
+  local p n=0
+  [ -f "$SV/git.pid" ] && while read -r p; do kill -0 "$p" 2>/dev/null && n=$((n+1)); done < "$SV/git.pid"
+  echo "$n"
+}
 printf '%s' "$SP" > "$SV/sp"; printf '%s' "$SP2" > "$SV/sp2"
 (cd "$JR" && export CLAUDE_PROJECT_DIR="$PWD" && entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" "$HS/journal-check.sh" < "$SV/sp"); rc=$?
 riporta 'journal-check: git non finisce'         nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
@@ -1405,14 +1416,14 @@ riporta 'journal-check: git non finisce'         nega-in-errore:tempo-esaurito "
 esito=$(esito_sveglia "$rc" "$(cat "$SV/out")"); json_valido < "$SV/out" || esito="$esito+JSON-ROTTO"
 riporta 'journal-check: secondo giro, lascia e lo dice' lascia-e-lo-dice:tempo-esaurito "$esito" "$(cat "$SV/out")"
 # un figlio rimasto vivo terrebbe aperto lo stderr dell'hook fino al timeout di Claude Code
-sleep 1; vivi=$(pgrep -f "$SV/" 2>/dev/null | wc -l | tr -d ' ')
+sleep 1; vivi=$(( $(pgrep -f "$SV/" 2>/dev/null | wc -l | tr -d ' ') + $(git_vivi) ))
 riporta 'dopo la sveglia non restano processi del gate' 0 "$vivi"
 # Un gate Python che lancia un git piantato: allo scadere si termina il gruppo, non
 # solo il figlio. Con il solo figlio terminato il git restava orfano (review della PR 19).
 (entro_il_timeout "$SV/out" env PATH="$SV/bin:$PATH" CLAUDE_PROJECT_DIR="$FR" "$HS/guard-tempo.py" < <(pl command 'npm test')); rc=$?
 riporta 'guard-tempo: git non finisce'           nega-in-errore:tempo-esaurito "$(esito_sveglia "$rc" "$(cat "$SV/out")")" "$(cat "$FC/err")"
-riporta 'guard-tempo: il git piantato non resta orfano' 0 "$(pgrep -f "$SV/bin/dormi" 2>/dev/null | wc -l | tr -d ' ')"
-pkill -KILL -f "$SV/bin/dormi" 2>/dev/null
+riporta 'guard-tempo: il git piantato non resta orfano' 0 "$(git_vivi)"
+while read -r p; do kill -KILL "$p" 2>/dev/null; done < "$SV/git.pid"
 # 3) hooks.json illeggibile o gate non registrato: la sveglia non parte, e si nega
 rm -f "$HS/hooks.json"
 diretta_copia() { local out rc; out=$(printf '%s' "$3" | "$HS/$2" 2>"$FC/err"); rc=$?
@@ -1474,7 +1485,7 @@ verifica 'python3 assente dal PATH: lo dice'            passa-e-lo-dice  diretta
 verifica 'bash assente dal PATH: lo dice'               passa-e-lo-dice  involucro "$(pl file_path "$FC/rotto.json")" PATH="$NOBASH"
 
 echo; echo "Review della PR 19 — Python 3.8, comandi esterni, cartella di lavoro"
-# 1) Il padre della sveglia non usa niente che manchi a Python 3.8, il minimo dichiarato
+# 1) Il padre della sveglia non usa niente che manchi a Python 3.8, il minimo dichiarato allora (dal 04/10 e' 3.10)
 #    nel README. os.waitstatus_to_exitcode esiste da 3.9: qui lo si toglie, e il padre
 #    deve restituire l'uscita del figlio senza eccezioni.
 padre() { python3 - "$H" "$1" <<'PY_EOF'

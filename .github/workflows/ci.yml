@@ -26,12 +26,16 @@ jobs:
     # Immagine fissata. Dal 19/10/2026 l'etichetta mobile passa a Ubuntu 26.04, a
     # scaglioni fino al 19/11: nel frattempo lo stesso job gira su una o sull'altra.
     #   https://github.com/actions/runner-images/issues/14748
-    # Su 26.04 il passo «Python minimo dichiarato» fallisce: actions/python-versions
-    # ha build del 3.8 solo per 20.04, 22.04 e 24.04 (manifest letto il 03/10/2026).
-    # Si passa a ubuntu-26.04 con una PR che lo prova, non per il calendario di GitHub.
-    runs-on: ubuntu-24.04
+    # Si e' passati a 26.04 con una prova, non per il calendario di GitHub: il 04/10/2026
+    # (PR 21) su 26.04 i gate negano come su 24.04. Fallivano solo i tre casi «git non
+    # finisce», perche' il finto git della suite era un link «dormi» a sleep e lo sleep
+    # di uutils non parte sotto un nome non suo; con un finto git che e' uno script la
+    # suite fa 491 su 491 su entrambe le immagini.
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      # Action fissate al commit, con il tag in commento: un tag si puo' spostare.
+      # Entrambe girano su node24 (SHA riletti con gh api il 04/10/2026).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Nessun runs-on su un'etichetta mobile
         run: |
@@ -43,7 +47,8 @@ jobs:
           if [ -n "$trovati" ]; then
             echo "runs-on su ubuntu-latest:"; echo "$trovati"
             echo "ubuntu-latest cambia immagine quando lo decide GitHub (actions/runner-images#14748:"
-            echo "a 26.04 dal 19/10/2026), e su 26.04 Python 3.8 non si installa. Scrivi l'immagine: ubuntu-24.04."
+            echo "a 26.04 dal 19/10/2026, a scaglioni), e un'immagine nuova si adotta con una PR che"
+            echo "la prova. Scrivi l'immagine: ubuntu-26.04."
             exit 1
           fi
           echo "nessun runs-on su ubuntu-latest"
@@ -130,20 +135,22 @@ jobs:
           git add -A && git commit -qm base
           CLAUDE_PROJECT_DIR="$P" bash "$GITHUB_WORKSPACE/plugins/cantiere/hooks/verifica-gate.sh"
 
-      # Il README del plugin dichiara Python 3.8 come minimo. Il runner ha un Python piu'
-      # recente (3.12 su ubuntu-24.04), che non vede l'uso di una funzione nata dopo:
+      # Il README del plugin dichiara Python 3.10 come minimo. Il runner ha un Python piu'
+      # recente (3.14 su ubuntu-26.04), che non vede l'uso di una funzione nata dopo:
       # os.waitstatus_to_exitcode (3.9) e' arrivata cosi' fino alla review della PR 19,
-      # e su 3.8 avrebbe fatto negare ogni azione a ogni gate Python.
+      # quando il minimo era 3.8, e li' avrebbe fatto negare ogni azione a ogni gate Python.
+      # Il minimo e' 3.10 dal 04/10/2026: 3.8 e' fuori supporto e actions/python-versions
+      # non ne ha una build per 26.04; 3.10 e' la piu' vecchia che c'e' su 24.04 e su 26.04.
       - name: Python minimo dichiarato
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.8'
+          python-version: '3.10'
 
       - name: verifica-gate con il Python minimo
         run: |
           python3 --version
-          python3 --version | grep -q '^Python 3\.8\.' || { echo "python3 non e' il 3.8 dichiarato"; exit 1; }
-          grep -q 'Python 3\.8' plugins/cantiere/README.md || { echo "il README non dichiara piu' Python 3.8: allinea questo passo"; exit 1; }
+          python3 --version | grep -q '^Python 3\.10\.' || { echo "python3 non e' il 3.10 dichiarato"; exit 1; }
+          grep -q 'Python 3\.10 o successivo' plugins/cantiere/README.md || { echo "il README non dichiara piu' Python 3.10: allinea questo passo"; exit 1; }
           P="$RUNNER_TEMP/progetto-prova-minimo"
           mkdir -p "$P" && cd "$P"
           git init -q -b main
